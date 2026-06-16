@@ -1,0 +1,205 @@
+"""Paper-aligned AWBF utilities.
+
+All boxes in this module use xyxy=[x1, y1, x2, y2] unless a function name
+explicitly says xywh. COCO export converts to xywh.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
+import json
+import math
+import os
+
+
+
+@dataclass(frozen=True)
+class Detection:
+    box: Tuple[float, float, float, float]
+    score: float
+    label: int
+    source: str = "model"
+    reliability: float = 1.0
+
+
+def _area_xyxy(box: Sequence[float]) -> float:
+    return max(0.0, float(box[2]) - float(box[0])) * max(0.0, float(box[3]) - float(box[1]))
+
+
+def intersection_area(box_a: Sequence[float], box_b: Sequence[float]) -> float:
+    x1 = max(float(box_a[0]), float(box_b[0]))
+    y1 = max(float(box_a[1]), float(box_b[1]))
+    x2 = min(float(box_a[2]), float(box_b[2]))
+    y2 = min(float(box_a[3]), float(box_b[3]))
+    return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+
+def iou(box_a: Sequence[float], box_b: Sequence[float]) -> float:
+    inter = intersection_area(box_a, box_b)
+    union = _area_xyxy(box_a) + _area_xyxy(box_b) - inter
+    return 0.0 if union <= 0.0 else inter / union
+
+
+def iob(subject_box: Sequence[float], reference_box: Sequence[float]) -> float:
+    """Intersection over subject box area: IoB(subject|reference)."""
+    denom = _area_xyxy(subject_box)
+    return 0.0 if denom <= 0.0 else intersection_area(subject_box, reference_box) / denom
+
+
+def confidence_weighted_box(detections: Sequence[Detection]) -> Detection:
+    if not detections:
+        raise ValueError("detections must not be empty")
+    weights = [max(0.0, d.score) for d in detections]
+    total = sum(weights)
+    if total == 0.0:
+        weights = [1.0 for _ in detections]
+        total = float(len(detections))
+    fused = tuple(sum(d.box[i] * w for d, w in zip(detections, weights)) / total for i in range(4))
+    return Detection(tuple(float(x) for x in fused), sum(d.score for d in detections) / len(detections), detections[0].label, "fused", max(d.reliability for d in detections))
+
+
+def decentralized_wbf(detections_by_model: Mapping[str, Sequence[Detection]], iou_thr: float = 0.55, skip_box_thr: float = 0.0) -> List[Detection]:
+    """Run classical WBF through model-keyed detection lists, preserving label separation."""
+    candidates = [d for detections in detections_by_model.values() for d in detections if d.score >= skip_box_thr]
+    candidates.sort(key=lambda d: d.score, reverse=True)
+    clusters: List[List[Detection]] = []
+    for det in candidates:
+        best_idx = None
+        best_iou = iou_thr
+        for idx, cluster in enumerate(clusters):
+            fused = confidence_weighted_box(cluster)
+            if det.label == fused.label:
+                overlap = iou(det.box, fused.box)
+                if overlap > best_iou:
+                    best_iou = overlap
+                    best_idx = idx
+        if best_idx is None:
+            clusters.append([det])
+        else:
+            clusters[best_idx].append(det)
+    fused = [replace(confidence_weighted_box(cluster), source="awbf_wbf") for cluster in clusters]
+    return sorted(fused, key=lambda d: d.score, reverse=True)
+
+
+def compete_pair(attacker: Detection, defender: Detection, threshold: float = 0.5) -> List[Detection]:
+    """Apply paper attack/defense rule to two detections."""
+    if attacker.label != defender.label or iou(attacker.box, defender.box) <= 0.0:
+        return [attacker, defender]
+    attack = attacker.score * iob(defender.box, attacker.box)
+    defense = defender.score * iob(attacker.box, defender.box)
+    margin = attack - defense
+    if margin > threshold:
+        return [attacker]
+    if margin < -threshold:
+        return [defender]
+    return [confidence_weighted_box([attacker, defender])]
+
+
+def awbf_competition(detections: Sequence[Detection], iou_thr: float = 0.55, threshold: float = 0.5) -> List[Detection]:
+    remaining = list(detections)
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(remaining)):
+            for j in range(i + 1, len(remaining)):
+                if remaining[i].label == remaining[j].label and iou(remaining[i].box, remaining[j].box) >= iou_thr:
+                    result = compete_pair(remaining[i], remaining[j], threshold)
+                    remaining = [d for k, d in enumerate(remaining) if k not in (i, j)] + result
+                    changed = True
+                    break
+            if changed:
+                break
+    return remaining
+
+
+def auction_bid(a: Detection, b: Detection, alpha: float = 0.5, beta: float = 0.3, gamma: float = 0.2) -> float:
+    utility = alpha * a.score + beta * iou(a.box, b.box) + gamma * a.reliability
+    return utility * iob(b.box, a.box)
+
+
+def negotiate_pair(a: Detection, b: Detection, rmax: int = 5, w: float = 0.3, threshold: float = 0.05) -> Tuple[Detection, int]:
+    """Multi-round proposal adjustment. Returns final/fused detection and updates used."""
+    if a.label != b.label:
+        return a, 0
+    current = a
+    last_bid = -math.inf
+    updates = 0
+    for _ in range(max(1, rmax)):
+        bid_current = auction_bid(current, b)
+        bid_other = auction_bid(b, current)
+        if abs(bid_current - bid_other) <= threshold:
+            return confidence_weighted_box([current, b]), updates
+        target = b if bid_other > bid_current else current
+        if target is current or bid_current <= last_bid + 1e-12:
+            break
+        new_box = tuple((1.0 - w) * current.box[i] + w * target.box[i] for i in range(4))
+        new_score = min(1.0, current.score + w * max(0.0, target.score - current.score))
+        current = replace(current, box=new_box, score=new_score)
+        last_bid = bid_current
+        updates += 1
+    return current, updates
+
+
+def awbf_negotiation(
+    detections: Sequence[Detection],
+    iou_thr: float = 0.55,
+    rmax: int = 5,
+    w: float = 0.3,
+    threshold: float = 0.05,
+    progress_callback: Callable[[Dict[str, Any]], None] | None = None,
+) -> List[Detection]:
+    remaining = list(detections)
+    changed = True
+    pass_num = 0
+    total_comparisons = 0
+    while changed:
+        pass_num += 1
+        changed = False
+        pass_comparisons = 0
+        for i in range(len(remaining)):
+            for j in range(i + 1, len(remaining)):
+                pass_comparisons += 1
+                total_comparisons += 1
+                if remaining[i].label == remaining[j].label and iou(remaining[i].box, remaining[j].box) >= iou_thr:
+                    fused, _updates = negotiate_pair(remaining[i], remaining[j], rmax=rmax, w=w, threshold=threshold)
+                    remaining = [d for k, d in enumerate(remaining) if k not in (i, j)] + [fused]
+                    changed = True
+                    break
+            if changed:
+                break
+        if progress_callback is not None:
+            progress_callback({
+                "pass": pass_num,
+                "remaining_boxes": len(remaining),
+                "pass_comparisons": pass_comparisons,
+                "total_comparisons": total_comparisons,
+                "changed": changed,
+                "rmax": rmax,
+            })
+    return remaining
+
+
+def xyxy_to_xywh(box: Sequence[float]) -> List[float]:
+    return [float(box[0]), float(box[1]), max(0.0, float(box[2]) - float(box[0])), max(0.0, float(box[3]) - float(box[1]))]
+
+
+def export_coco_detections(detections_by_image: Mapping[int, Sequence[Detection]], output_json: str) -> List[Dict[str, Any]]:
+    rows = []
+    for image_id, detections in detections_by_image.items():
+        for d in detections:
+            rows.append({"image_id": int(image_id), "category_id": int(d.label), "bbox": xyxy_to_xywh(d.box), "score": float(min(1.0, max(0.0, d.score)))})
+    os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
+    with open(output_json, "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2)
+    return rows
+
+
+def evaluate_coco(annotations_json: str, detections_json: str) -> Dict[str, float]:
+    from pycocotools.coco import COCO
+    from pycocotools.cocoeval import COCOeval
+    coco_gt = COCO(annotations_json)
+    coco_dt = coco_gt.loadRes(detections_json)
+    ev = COCOeval(coco_gt, coco_dt, "bbox")
+    ev.evaluate(); ev.accumulate(); ev.summarize()
+    keys = ["AP", "AP50", "AP75", "AP_small", "AP_medium", "AP_large", "AR", "AR50", "AR75", "AR_small", "AR_medium", "AR_large"]
+    return dict(zip(keys, map(float, ev.stats)))
