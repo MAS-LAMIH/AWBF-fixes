@@ -218,9 +218,10 @@ def fuse_all(by_model, args):
         print(f"  {method}: {format_duration(elapsed)}", flush=True)
     return outputs, timings
 
-def main():
+def main(argv=None):
     ap=argparse.ArgumentParser()
     ap.add_argument('--annotations'); ap.add_argument('--predictions-dir'); ap.add_argument('--output-dir',default='outputs/reproduction')
+    ap.add_argument('--evaluate-predictions', nargs='+', help='Evaluate one or more existing COCO detection JSON files and skip benchmark loading/fusion')
     ap.add_argument('--download-benchmark', action='store_true', help='Download/extract the WBF benchmark if required files are missing')
     ap.add_argument('--benchmark-zip', help='Use a manually downloaded local benchmark.zip instead of downloading from GitHub')
     ap.add_argument('--benchmark-dir', help='Directory containing benchmark.zip and benchmark/ extraction')
@@ -229,7 +230,23 @@ def main():
     ap.add_argument('--progress-interval', type=int, default=100, help='Print fusion progress every N images')
     ap.add_argument('--profile', action='store_true', help='Print detailed per-image/per-strategy timing and AWBF negotiation progress')
     ap.add_argument('--disable-preclustering', action='store_true', help='Disable label/IoU pre-clustering and run previous global per-image fusion behavior')
-    args=ap.parse_args()
+    args=ap.parse_args(argv)
+    if args.evaluate_predictions:
+        if not args.annotations:
+            raise SystemExit("--annotations is required with --evaluate-predictions")
+        report = {"annotations": args.annotations, "metrics": {}}
+        for prediction_json in args.evaluate_predictions:
+            print(f"Evaluating predictions: {prediction_json}", flush=True)
+            metrics = evaluate_coco(args.annotations, prediction_json)
+            report["metrics"][prediction_json] = metrics
+            print(f"Metrics for {prediction_json}:", flush=True)
+            for key, value in metrics.items():
+                print(f"  {key}: {value:.6f}", flush=True)
+        report_path = Path("outputs/evaluation_report.json")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2))
+        print(f"Saved evaluation report to {report_path}", flush=True)
+        return report
     if args.sample:
         by_model=sample_predictions()
     elif args.download_benchmark or args.benchmark_zip or args.benchmark_dir:

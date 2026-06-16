@@ -135,3 +135,21 @@ python scripts/reproduce_paper_results.py \
 ```
 
 `--profile` adds per-strategy timings, cluster statistics, and per-negotiation-pass comparison counts. Pre-clustering is enabled by default; add `--disable-preclustering` only when you need to compare against the previous global per-image behavior.
+
+### Direct evaluation of existing COCO prediction JSONs
+
+If fused prediction JSONs already exist, evaluate them directly without loading
+benchmark CSVs or running fusion:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --evaluate-predictions \
+    outputs/reproduction_benchmark/wbf_predictions.json \
+    outputs/reproduction_benchmark/awbf_predictions.json \
+    outputs/reproduction_benchmark/awbf_competition_predictions.json \
+    outputs/reproduction_benchmark/awbf_negotiation_predictions.json \
+  --annotations data/coco/annotations/instances_val2017.json
+```
+
+Direct evaluation mode requires `--annotations`, prints metrics for each input
+file, and saves `outputs/evaluation_report.json`.
