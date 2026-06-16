@@ -8,7 +8,7 @@ exports WBF, AWBF, AWBF-competition, and AWBF-Negotiation results, then evaluate
 with pycocotools when annotations are supplied.
 """
 from __future__ import annotations
-import argparse, json, os, sys
+import argparse, csv, json, os, sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, decentralized_wbf, evaluate_coco, export_coco_detections
+from scripts.download_benchmark import EXPECTED_FILES, ensure_benchmark, find_expected_file, validate_benchmark_files
 
 PAPER_TARGETS={
  'WBF': {'AP':0.673,'AP50':0.894,'AP75':0.709},
@@ -38,6 +39,32 @@ def load_predictions(predictions_dir):
     if not by_model: raise FileNotFoundError(f'No *.json prediction files found in {predictions_dir}')
     return by_model
 
+def load_benchmark_predictions(benchmark_dir):
+    extract_dir = Path(benchmark_dir) / 'benchmark'
+    validate_benchmark_files(extract_dir)
+    by_model = {}
+    for expected in EXPECTED_FILES:
+        path = find_expected_file(extract_dir, expected)
+        model_name = Path(expected).stem
+        per_image = defaultdict(list)
+        with open(path, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            required = {'img_id', 'label', 'score', 'x1', 'x2', 'y1', 'y2'}
+            missing = required.difference(reader.fieldnames or [])
+            if missing:
+                raise ValueError(f"Benchmark file {path} is missing columns: {', '.join(sorted(missing))}")
+            for row in reader:
+                per_image[int(row['img_id'])].append(
+                    Detection(
+                        (float(row['x1']), float(row['y1']), float(row['x2']), float(row['y2'])),
+                        float(row['score']),
+                        int(float(row['label'])),
+                        model_name,
+                    )
+                )
+        by_model[model_name] = per_image
+    return by_model
+
 def sample_predictions():
     return {'det_a':{1:[Detection((0,0,1,1),.9,1,'det_a'), Detection((2,2,3,3),.7,2,'det_a')]}, 'det_b':{1:[Detection((.1,0,1.1,1),.8,1,'det_b')]}}
 
@@ -56,12 +83,22 @@ def fuse_all(by_model, args):
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--annotations'); ap.add_argument('--predictions-dir'); ap.add_argument('--output-dir',default='outputs/reproduction')
+    ap.add_argument('--download-benchmark', action='store_true', help='Download/extract the WBF benchmark if required files are missing')
+    ap.add_argument('--benchmark-dir', default='data/benchmark', help='Directory containing benchmark.zip and benchmark/ extraction')
     ap.add_argument('--sample', action='store_true'); ap.add_argument('--iou-threshold',type=float,default=.55); ap.add_argument('--score-threshold',type=float,default=0.0)
     ap.add_argument('--cooperation-threshold',type=float,default=.5); ap.add_argument('--negotiation-threshold',type=float,default=.05); ap.add_argument('--rounds',type=int,default=5); ap.add_argument('--weight',type=float,default=.3)
     args=ap.parse_args()
-    if args.sample: by_model=sample_predictions()
+    if args.sample:
+        by_model=sample_predictions()
+    elif args.download_benchmark:
+        benchmark_extract = Path(args.benchmark_dir) / 'benchmark'
+        try:
+            validate_benchmark_files(benchmark_extract)
+        except FileNotFoundError:
+            ensure_benchmark(args.benchmark_dir)
+        by_model=load_benchmark_predictions(args.benchmark_dir)
     else:
-        if not args.predictions_dir: raise SystemExit('--predictions-dir is required unless --sample is used')
+        if not args.predictions_dir: raise SystemExit('--predictions-dir is required unless --sample or --download-benchmark is used')
         by_model=load_predictions(args.predictions_dir)
     os.makedirs(args.output_dir,exist_ok=True)
     outputs=fuse_all(by_model,args); report={'paper_targets':PAPER_TARGETS,'metrics':{},'notes':[]}
@@ -74,6 +111,7 @@ def main():
         else:
             report['metrics'][method]={'detections':sum(len(v) for v in dets.values()),'evaluation':'skipped: provide --annotations for COCO metrics'}
     if args.sample: report['notes'].append('Sample mode validates fusion/export only; it cannot reproduce paper metrics without COCO annotations and detector predictions.')
+    if not args.annotations: report['notes'].append('COCO AP/AR evaluation skipped because --annotations was not supplied; fusion/export does not require full COCO annotations.')
     Path(args.output_dir,'reproduction_report.json').write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2))
 if __name__=='__main__': main()
