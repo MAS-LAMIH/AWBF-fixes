@@ -35,3 +35,100 @@ If you find this code useful please cite:
   organization={CEUR-WS}
 }
 ```
+
+## Reproducing paper/benchmark fusion outputs
+
+The reproduction script can run without COCO annotations when you only need to
+validate download, fusion, and COCO-format prediction export. COCO AP/AR metrics
+are computed only when `--annotations` points to a COCO annotations JSON.
+
+### Download the WBF benchmark files
+
+```bash
+python scripts/download_benchmark.py --output-dir data/benchmark
+```
+
+For a manually downloaded archive, skip the network download and extract/validate
+the local file instead:
+
+```bash
+python scripts/download_benchmark.py \
+  --benchmark-zip /path/to/benchmark.zip \
+  --output-dir data/benchmark
+```
+
+This downloads `benchmark.zip` from:
+
+```text
+https://github.com/ZFTurbo/Weighted-Boxes-Fusion/releases/download/v1.0.5/benchmark.zip
+```
+
+The archive is cached at `data/benchmark/benchmark.zip`. If the zip already
+exists, the downloader reuses it. Files are extracted with zip-slip protection to
+`data/benchmark/benchmark/`, and the downloader validates the expected benchmark
+CSV files after extraction.
+
+### Run benchmark fusion/export without COCO evaluation
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --download-benchmark \
+  --benchmark-dir data/benchmark \
+  --output-dir outputs/reproduction_benchmark
+```
+
+If you manually downloaded `benchmark.zip` (for example on a machine with browser
+access to GitHub release assets), use the local zip directly:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-zip /path/to/benchmark.zip \
+  --benchmark-dir data/benchmark \
+  --output-dir outputs/reproduction_benchmark
+```
+
+This command downloads/extracts the benchmark only if expected files are missing,
+runs WBF/AWBF/AWBF-competition/AWBF-Negotiation fusion, writes COCO-format
+prediction JSONs, and stores `outputs/reproduction_benchmark/reproduction_report.json`.
+Because no COCO annotations are supplied, AP/AR metric evaluation is skipped with: `COCO AP/AR metrics cannot be computed because annotations are missing.`
+
+### Run full COCO metric evaluation
+
+Provide COCO annotations when you want AP/AR metrics:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --download-benchmark \
+  --benchmark-dir data/benchmark \
+  --annotations data/coco/annotations/instances_val2017.json \
+  --output-dir outputs/reproduction_benchmark_eval
+```
+
+You can also bypass the benchmark downloader and provide your own COCO detection
+JSON files, one file per detector/model:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --predictions-dir data/predictions \
+  --annotations data/coco/annotations/instances_val2017.json \
+  --output-dir outputs/reproduction_custom
+```
+
+### Smoke test without external data
+
+```bash
+python scripts/reproduce_paper_results.py --sample --output-dir outputs/reproduction_sample
+```
+
+### Progress output for long benchmark runs
+
+Benchmark reproduction can take a while on large CSV files. The reproduction
+script now prints progress while loading CSVs, fusing images, exporting JSONs,
+and evaluating COCO metrics. Adjust image-level fusion progress frequency with:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-dir data/benchmark \
+  --output-dir outputs/reproduction_benchmark \
+  --progress-interval 25
+```
