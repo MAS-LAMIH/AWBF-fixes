@@ -134,4 +134,4 @@ python scripts/reproduce_paper_results.py \
   --profile
 ```
 
-`--profile` adds per-strategy timings and per-negotiation-pass comparison counts.
+`--profile` adds per-strategy timings, cluster statistics, and per-negotiation-pass comparison counts. Pre-clustering is enabled by default; add `--disable-preclustering` only when you need to compare against the previous global per-image behavior.

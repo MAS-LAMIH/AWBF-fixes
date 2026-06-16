@@ -46,6 +46,54 @@ def iob(subject_box: Sequence[float], reference_box: Sequence[float]) -> float:
     return 0.0 if denom <= 0.0 else intersection_area(subject_box, reference_box) / denom
 
 
+def cluster_detections_by_label_and_iou(
+    detections: Sequence[Detection],
+    iou_thr: float = 0.55,
+    use_representative: bool = True,
+) -> List[List[Detection]]:
+    """Cluster detections by label and overlap before fusion/competition.
+
+    Boxes never cluster across labels. A box joins the first same-label cluster if
+    its IoU with the cluster representative (confidence-weighted box) or any
+    member is at least ``iou_thr``.
+    """
+    clusters: List[List[Detection]] = []
+    for det in sorted(detections, key=lambda d: d.score, reverse=True):
+        matched_idx = None
+        for idx, cluster in enumerate(clusters):
+            if cluster[0].label != det.label:
+                continue
+            candidates = [confidence_weighted_box(cluster)] if use_representative else cluster
+            if any(iou(det.box, candidate.box) >= iou_thr for candidate in candidates):
+                matched_idx = idx
+                break
+            if use_representative and any(iou(det.box, member.box) >= iou_thr for member in cluster):
+                matched_idx = idx
+                break
+        if matched_idx is None:
+            clusters.append([det])
+        else:
+            clusters[matched_idx].append(det)
+    return clusters
+
+
+def cluster_stats(detections: Sequence[Detection], clusters: Sequence[Sequence[Detection]]) -> Dict[str, float]:
+    box_count = len(detections)
+    cluster_count = len(clusters)
+    largest = max((len(c) for c in clusters), default=0)
+    avg = (box_count / cluster_count) if cluster_count else 0.0
+    global_pairs = box_count * (box_count - 1) // 2
+    clustered_pairs = sum(len(c) * (len(c) - 1) // 2 for c in clusters)
+    return {
+        "boxes_before_clustering": box_count,
+        "clusters": cluster_count,
+        "largest_cluster_size": largest,
+        "average_cluster_size": avg,
+        "global_pair_comparisons": global_pairs,
+        "clustered_pair_comparisons": clustered_pairs,
+        "comparisons_avoided_estimate": global_pairs - clustered_pairs,
+    }
+
 def confidence_weighted_box(detections: Sequence[Detection]) -> Detection:
     if not detections:
         raise ValueError("detections must not be empty")

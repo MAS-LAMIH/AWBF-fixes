@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, decentralized_wbf, evaluate_coco, export_coco_detections
+from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, cluster_detections_by_label_and_iou, cluster_stats, decentralized_wbf, evaluate_coco, export_coco_detections
 from scripts.download_benchmark import EXPECTED_FILES, ensure_benchmark, find_expected_file, validate_benchmark_files
 
 PAPER_TARGETS={
@@ -97,6 +97,24 @@ def load_benchmark_predictions(benchmark_dir):
 def sample_predictions():
     return {'det_a':{1:[Detection((0,0,1,1),.9,1,'det_a'), Detection((2,2,3,3),.7,2,'det_a')]}, 'det_b':{1:[Detection((.1,0,1.1,1),.8,1,'det_b')]}}
 
+def detections_by_source(detections):
+    grouped = defaultdict(list)
+    for det in detections:
+        grouped[det.source].append(det)
+    return grouped
+
+def fuse_wbf_clusters(clusters, iou_threshold, score_threshold):
+    fused = []
+    for cluster in clusters:
+        fused.extend(decentralized_wbf(detections_by_source(cluster), iou_threshold, score_threshold))
+    return fused
+
+def run_clustered_strategy(clusters, strategy):
+    fused = []
+    for cluster in clusters:
+        fused.extend(strategy(cluster))
+    return fused
+
 def fuse_all(by_model, args):
     image_ids=sorted({i for model in by_model.values() for i in model})
     outputs={k:{} for k in PAPER_TARGETS}
@@ -109,26 +127,44 @@ def fuse_all(by_model, args):
         per_model={m: imgs.get(image_id, []) for m, imgs in by_model.items()}
         flat=[d for ds in per_model.values() for d in ds]
         box_count = len(flat)
-        pair_comparisons = box_count * (box_count - 1) // 2
+        if args.disable_preclustering:
+            clusters = [flat]
+        else:
+            clusters = cluster_detections_by_label_and_iou(flat, args.iou_threshold)
+        stats = cluster_stats(flat, clusters)
         should_report = args.profile or index == 1 or index == total or index % interval == 0
         if should_report:
             print(
                 f"image {index}/{total} image_id={image_id} boxes={box_count} "
-                f"pair_comparisons_per_scan={pair_comparisons} elapsed={format_duration(time.perf_counter() - run_start)} "
+                f"clusters={int(stats['clusters'])} largest_cluster={int(stats['largest_cluster_size'])} "
+                f"avg_cluster={stats['average_cluster_size']:.1f} "
+                f"pair_comparisons_global={int(stats['global_pair_comparisons'])} "
+                f"pair_comparisons_clustered={int(stats['clustered_pair_comparisons'])} "
+                f"comparisons_avoided={int(stats['comparisons_avoided_estimate'])} "
+                f"elapsed={format_duration(time.perf_counter() - run_start)} "
                 f"ETA={estimate_eta(run_start, index - 1, total) if index > 1 else 'unknown'}",
                 flush=True,
             )
 
         start = time.perf_counter()
-        outputs['WBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+        if args.disable_preclustering:
+            outputs['WBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+        else:
+            outputs['WBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
         timings['WBF'] += time.perf_counter() - start
 
         start = time.perf_counter()
-        outputs['AWBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+        if args.disable_preclustering:
+            outputs['AWBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+        else:
+            outputs['AWBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
         timings['AWBF'] += time.perf_counter() - start
 
         start = time.perf_counter()
-        outputs['AWBF-competition'][image_id]=awbf_competition(flat,args.iou_threshold,args.cooperation_threshold)
+        if args.disable_preclustering:
+            outputs['AWBF-competition'][image_id]=awbf_competition(flat,args.iou_threshold,args.cooperation_threshold)
+        else:
+            outputs['AWBF-competition'][image_id]=run_clustered_strategy(clusters, lambda c: awbf_competition(c,args.iou_threshold,args.cooperation_threshold))
         timings['AWBF-competition'] += time.perf_counter() - start
 
         def negotiation_progress(event):
@@ -144,14 +180,27 @@ def fuse_all(by_model, args):
                 )
 
         start = time.perf_counter()
-        outputs['AWBF-Negotiation'][image_id]=awbf_negotiation(
-            flat,
-            args.iou_threshold,
-            args.rounds,
-            args.weight,
-            args.negotiation_threshold,
-            progress_callback=negotiation_progress if args.profile else None,
-        )
+        if args.disable_preclustering:
+            outputs['AWBF-Negotiation'][image_id]=awbf_negotiation(
+                flat,
+                args.iou_threshold,
+                args.rounds,
+                args.weight,
+                args.negotiation_threshold,
+                progress_callback=negotiation_progress if args.profile else None,
+            )
+        else:
+            outputs['AWBF-Negotiation'][image_id]=run_clustered_strategy(
+                clusters,
+                lambda c: awbf_negotiation(
+                    c,
+                    args.iou_threshold,
+                    args.rounds,
+                    args.weight,
+                    args.negotiation_threshold,
+                    progress_callback=negotiation_progress if args.profile else None,
+                ),
+            )
         timings['AWBF-Negotiation'] += time.perf_counter() - start
 
         if args.profile:
@@ -179,6 +228,7 @@ def main():
     ap.add_argument('--cooperation-threshold',type=float,default=.5); ap.add_argument('--negotiation-threshold',type=float,default=.05); ap.add_argument('--rounds',type=int,default=5); ap.add_argument('--weight',type=float,default=.3)
     ap.add_argument('--progress-interval', type=int, default=100, help='Print fusion progress every N images')
     ap.add_argument('--profile', action='store_true', help='Print detailed per-image/per-strategy timing and AWBF negotiation progress')
+    ap.add_argument('--disable-preclustering', action='store_true', help='Disable label/IoU pre-clustering and run previous global per-image fusion behavior')
     args=ap.parse_args()
     if args.sample:
         by_model=sample_predictions()

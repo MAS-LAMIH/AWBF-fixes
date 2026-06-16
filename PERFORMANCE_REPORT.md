@@ -42,6 +42,30 @@ area calculations. AWBF competition and negotiation repeat pair scans after each
 merge/removal. If many boxes overlap and each pass changes only one pair, the
 number of scans can grow with the number of boxes.
 
+
+## Pre-clustering update
+
+A label/IoU pre-clustering step now runs before all four fusion methods by
+default. It partitions detections per image into same-label overlap clusters and
+runs WBF, AWBF, competition, and negotiation independently inside each cluster.
+This prevents cross-label and cross-cluster pair comparisons. The previous global
+per-image behavior is still available with `--disable-preclustering`.
+
+For an image with `n_i` boxes split into clusters `c_1 ... c_m`, one full
+pairwise scan changes from:
+
+```text
+before: O(n_i^2), comparisons = n_i * (n_i - 1) / 2
+after:  O(sum_j c_j^2), comparisons = sum_j c_j * (c_j - 1) / 2
+```
+
+Worst-case complexity is unchanged when all boxes have the same label and overlap
+into one cluster. In the common case, clusters are much smaller than the whole
+image, so competition and negotiation avoid most pairwise IoU checks. Profiling
+now reports `clusters`, `largest_cluster`, `avg_cluster`,
+`pair_comparisons_global`, `pair_comparisons_clustered`, and
+`comparisons_avoided`.
+
 ## Asymptotic complexity
 
 Let:
@@ -151,19 +175,17 @@ The JSON report now includes `timings_seconds` for those four fusion strategies.
 Because competition and negotiation are O(n²) per scan and can become O(n³) per
 image with repeated restarts, optimize before attempting full benchmark runs:
 
-1. **Group by label before pairwise matching** so different categories are never
-   compared.
-2. **Spatial indexing / grid bucketing / R-tree** to avoid IoU calls for boxes
+1. **Spatial indexing / grid bucketing / R-tree** to avoid IoU calls for boxes
    that cannot overlap.
-3. **Vectorize IoU calculations** with NumPy for per-label box arrays.
-4. **Limit candidates per box** by score threshold, top-k per label/image, or
+2. **Vectorize IoU calculations** with NumPy for per-label box arrays.
+3. **Limit candidates per box** by score threshold, top-k per label/image, or
    detector-specific prefiltering.
-5. **Avoid restart-from-zero after each merge**; maintain an adjacency graph or
+4. **Avoid restart-from-zero after each merge**; maintain an adjacency graph or
    union-find clusters of overlapping boxes.
-6. **Add a max comparisons/images guard** for interactive runs.
-7. **Run one strategy at a time** via a future `--methods` flag to avoid running
+5. **Add a max comparisons/images guard** for interactive runs.
+6. **Run one strategy at a time** via a future `--methods` flag to avoid running
    all four fusion methods when debugging performance.
-8. **Parallelize per-image fusion**, since images are independent.
+7. **Parallelize per-image fusion**, since images are independent.
 
 ## Conclusion
 
