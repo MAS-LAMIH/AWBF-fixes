@@ -48,11 +48,13 @@ def load_predictions(predictions_dir):
 
 def load_benchmark_predictions(benchmark_dir):
     extract_dir = Path(benchmark_dir) / 'benchmark'
+    print(f"Loading benchmark CSV files from {extract_dir}", flush=True)
     validate_benchmark_files(extract_dir)
     by_model = {}
-    for expected in EXPECTED_FILES:
+    for index, expected in enumerate(EXPECTED_FILES, start=1):
         path = find_expected_file(extract_dir, expected)
         model_name = Path(expected).stem
+        print(f"  loading {index}/{len(EXPECTED_FILES)}: {expected}", flush=True)
         per_image = defaultdict(list)
         with open(path, newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -69,7 +71,10 @@ def load_benchmark_predictions(benchmark_dir):
                         model_name,
                     )
                 )
+        detections = sum(len(items) for items in per_image.values())
+        print(f"    loaded {detections} detections across {len(per_image)} images", flush=True)
         by_model[model_name] = per_image
+    print(f"Loaded {len(by_model)} benchmark CSV files", flush=True)
     return by_model
 
 def sample_predictions():
@@ -78,13 +83,19 @@ def sample_predictions():
 def fuse_all(by_model, args):
     image_ids=sorted({i for model in by_model.values() for i in model})
     outputs={k:{} for k in PAPER_TARGETS}
-    for image_id in image_ids:
+    total = len(image_ids)
+    interval = max(1, args.progress_interval)
+    print(f"Fusing predictions for {total} images using {len(by_model)} detector/model files", flush=True)
+    for index, image_id in enumerate(image_ids, start=1):
+        if index == 1 or index == total or index % interval == 0:
+            print(f"  fusion progress: {index}/{total} images", flush=True)
         per_model={m: imgs.get(image_id, []) for m, imgs in by_model.items()}
         flat=[d for ds in per_model.values() for d in ds]
         outputs['WBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
         outputs['AWBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
         outputs['AWBF-competition'][image_id]=awbf_competition(flat,args.iou_threshold,args.cooperation_threshold)
         outputs['AWBF-Negotiation'][image_id]=awbf_negotiation(flat,args.iou_threshold,args.rounds,args.weight,args.negotiation_threshold)
+    print("Fusion complete", flush=True)
     return outputs
 
 def main():
@@ -95,6 +106,7 @@ def main():
     ap.add_argument('--benchmark-dir', help='Directory containing benchmark.zip and benchmark/ extraction')
     ap.add_argument('--sample', action='store_true'); ap.add_argument('--iou-threshold',type=float,default=.55); ap.add_argument('--score-threshold',type=float,default=0.0)
     ap.add_argument('--cooperation-threshold',type=float,default=.5); ap.add_argument('--negotiation-threshold',type=float,default=.05); ap.add_argument('--rounds',type=int,default=5); ap.add_argument('--weight',type=float,default=.3)
+    ap.add_argument('--progress-interval', type=int, default=100, help='Print fusion progress every N images')
     args=ap.parse_args()
     if args.sample:
         by_model=sample_predictions()
@@ -113,8 +125,11 @@ def main():
     outputs=fuse_all(by_model,args); report={'paper_targets':PAPER_TARGETS,'metrics':{},'notes':[]}
     for method,dets in outputs.items():
         pred_path=os.path.join(args.output_dir,OUTPUT_FILENAMES[method])
+        total_detections = sum(len(v) for v in dets.values())
+        print(f"Exporting {method}: {total_detections} detections -> {pred_path}", flush=True)
         export_coco_detections(dets,pred_path)
         if args.annotations:
+            print(f"Evaluating {method} with COCO annotations {args.annotations}", flush=True)
             metrics=evaluate_coco(args.annotations,pred_path)
             report['metrics'][method]=metrics
         else:

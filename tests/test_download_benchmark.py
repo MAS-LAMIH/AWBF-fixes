@@ -19,10 +19,10 @@ def test_download_uses_cached_zip(tmp_path, monkeypatch):
     cached = tmp_path / "benchmark.zip"
     cached.write_bytes(b"already here")
 
-    def fail_urlretrieve(_url, _path):
-        raise AssertionError("urlretrieve should not be called when cache exists")
+    def fail_urlopen(_url, _path):
+        raise AssertionError("urlopen should not be called when cache exists")
 
-    monkeypatch.setattr("scripts.download_benchmark.urlretrieve", fail_urlretrieve)
+    monkeypatch.setattr("scripts.download_benchmark.urlopen", fail_urlopen)
     assert download_benchmark_zip(tmp_path) == cached
     assert cached.read_bytes() == b"already here"
 
@@ -56,10 +56,10 @@ def test_local_zip_input_is_copied_extracted_and_validated(tmp_path, monkeypatch
     _write_minimal_benchmark_zip(local_zip)
     output_dir = tmp_path / "cache"
 
-    def fail_urlretrieve(_url, _path):
-        raise AssertionError("urlretrieve should not be called for --benchmark-zip")
+    def fail_urlopen(_url, _path):
+        raise AssertionError("urlopen should not be called for --benchmark-zip")
 
-    monkeypatch.setattr("scripts.download_benchmark.urlretrieve", fail_urlretrieve)
+    monkeypatch.setattr("scripts.download_benchmark.urlopen", fail_urlopen)
     cached_zip = use_local_benchmark_zip(output_dir, local_zip)
     assert cached_zip == output_dir / "benchmark.zip"
     assert cached_zip.read_bytes() == local_zip.read_bytes()

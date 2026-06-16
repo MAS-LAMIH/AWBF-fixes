@@ -119,3 +119,16 @@ python scripts/reproduce_paper_results.py \
 ```bash
 python scripts/reproduce_paper_results.py --sample --output-dir outputs/reproduction_sample
 ```
+
+### Progress output for long benchmark runs
+
+Benchmark reproduction can take a while on large CSV files. The reproduction
+script now prints progress while loading CSVs, fusing images, exporting JSONs,
+and evaluating COCO metrics. Adjust image-level fusion progress frequency with:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-dir data/benchmark \
+  --output-dir outputs/reproduction_benchmark \
+  --progress-interval 25
+```

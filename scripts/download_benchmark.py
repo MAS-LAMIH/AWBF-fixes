@@ -7,7 +7,7 @@ import shutil
 import sys
 import zipfile
 from pathlib import Path
-from urllib.request import urlretrieve
+from urllib.request import urlopen
 
 BENCHMARK_URL = "https://github.com/ZFTurbo/Weighted-Boxes-Fusion/releases/download/v1.0.5/benchmark.zip"
 ZIP_NAME = "benchmark.zip"
@@ -56,9 +56,9 @@ def use_local_benchmark_zip(output_dir: str | Path, benchmark_zip: str | Path) -
     destination = benchmark_zip_path(output)
     if source.resolve() != destination.resolve():
         shutil.copyfile(source, destination)
-        print(f"Copied local benchmark archive from {source} to {destination}")
+        print(f"Copied local benchmark archive from {source} to {destination}", flush=True)
     else:
-        print(f"Using local benchmark archive: {destination}")
+        print(f"Using local benchmark archive: {destination}", flush=True)
     return destination
 
 
@@ -67,10 +67,29 @@ def download_benchmark_zip(output_dir: str | Path, url: str = BENCHMARK_URL) -> 
     output.mkdir(parents=True, exist_ok=True)
     zip_path = benchmark_zip_path(output)
     if zip_path.exists() and zip_path.stat().st_size > 0:
-        print(f"Using cached benchmark archive: {zip_path}")
+        print(f"Using cached benchmark archive: {zip_path}", flush=True)
         return zip_path
-    print(f"Downloading benchmark archive from {url} to {zip_path}")
-    urlretrieve(url, zip_path)
+
+    print(f"Downloading benchmark archive from {url} to {zip_path}", flush=True)
+    downloaded = 0
+    last_reported_pct = -1
+    with urlopen(url, timeout=60) as response, open(zip_path, "wb") as out_file:
+        total_header = response.headers.get("Content-Length")
+        total = int(total_header) if total_header and total_header.isdigit() else None
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            out_file.write(chunk)
+            downloaded += len(chunk)
+            if total:
+                pct = int(downloaded * 100 / total)
+                if pct >= last_reported_pct + 10 or pct == 100:
+                    print(f"  download progress: {pct}% ({downloaded}/{total} bytes)", flush=True)
+                    last_reported_pct = pct
+            elif downloaded // (10 * 1024 * 1024) != (downloaded - len(chunk)) // (10 * 1024 * 1024):
+                print(f"  download progress: {downloaded} bytes", flush=True)
+    print(f"Downloaded benchmark archive: {zip_path} ({downloaded} bytes)", flush=True)
     return zip_path
 
 
@@ -85,10 +104,15 @@ def _safe_target(base: Path, member_name: str) -> Path:
 def safe_extract(zip_path: str | Path, extract_dir: str | Path) -> Path:
     extract_path = Path(extract_dir)
     extract_path.mkdir(parents=True, exist_ok=True)
+    print(f"Extracting benchmark archive to {extract_path}", flush=True)
     with zipfile.ZipFile(zip_path) as zf:
-        for member in zf.infolist():
+        members = zf.infolist()
+        for member in members:
             _safe_target(extract_path, member.filename)
-        zf.extractall(extract_path)
+        for index, member in enumerate(members, start=1):
+            zf.extract(member, extract_path)
+            if index == len(members) or index % 5 == 0:
+                print(f"  extraction progress: {index}/{len(members)} files", flush=True)
     return extract_path
 
 
@@ -113,13 +137,13 @@ def ensure_benchmark(output_dir: str | Path, benchmark_zip: str | Path | None = 
     extract_dir = benchmark_extract_dir(output_dir)
     try:
         validate_benchmark_files(extract_dir)
-        print(f"Using existing extracted benchmark files: {extract_dir}")
+        print(f"Using existing extracted benchmark files: {extract_dir}", flush=True)
         return extract_dir
     except FileNotFoundError:
         pass
     safe_extract(zip_path, extract_dir)
     validate_benchmark_files(extract_dir)
-    print(f"Benchmark ready: {extract_dir}")
+    print(f"Benchmark ready: {extract_dir}", flush=True)
     return extract_dir
 
 
