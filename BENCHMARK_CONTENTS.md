@@ -1,136 +1,123 @@
-# Benchmark contents and reproduction status
+# Benchmark contents
 
-## Commands run
+## Download source
+
+```text
+https://github.com/ZFTurbo/Weighted-Boxes-Fusion/releases/download/v1.0.5/benchmark.zip
+```
+
+## Commands attempted
 
 ```bash
 python scripts/download_benchmark.py --output-dir data/benchmark
 ```
 
-Result in this execution environment: **failed before download** because outbound
-access to the GitHub release asset was blocked by the configured proxy:
+and:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-dir data/benchmark \
+  --output-dir outputs/reproduction_benchmark
+```
+
+## Download/extraction result in this environment
+
+The archive could not be downloaded in this execution environment because the
+configured proxy rejects the GitHub release-asset connection:
 
 ```text
 urllib.error.URLError: <urlopen error Tunnel connection failed: 403 Forbidden>
 ```
 
-Because `benchmark.zip` could not be downloaded in this environment, the archive
-contents could not be inspected here and the benchmark reproduction command could
-not be completed against the real benchmark files.
+A direct no-proxy attempt also failed DNS resolution. Therefore the real
+`data/benchmark/benchmark.zip` archive and `data/benchmark/benchmark/` extracted
+files are not present in this checkout.
 
-```bash
-python scripts/reproduce_paper_results.py \
-  --download-benchmark \
-  --benchmark-dir data/benchmark \
-  --output-dir outputs/reproduction_benchmark
-```
+## Full directory tree found
 
-This command is wired to download/extract automatically when the benchmark files
-are missing, but it depends on access to the same GitHub release asset.
+No benchmark directory tree was produced from the real archive because download
+failed before the archive could be cached or extracted.
 
-## Archive path
-
-Expected local cache path after a successful download:
+Expected paths after a successful run are:
 
 ```text
-data/benchmark/benchmark.zip
+data/
+└── benchmark/
+    ├── benchmark.zip
+    └── benchmark/
+        ├── EffNetB0-preds.csv
+        ├── EffNetB0-mirror-preds.csv
+        ├── EffNetB1-preds.csv
+        ├── EffNetB1-mirror-preds.csv
+        ├── EffNetB2-preds.csv
+        ├── EffNetB2-mirror-preds.csv
+        ├── EffNetB3-preds.csv
+        ├── EffNetB3-mirror-preds.csv
+        ├── EffNetB4-preds.csv
+        ├── EffNetB4-mirror-preds.csv
+        ├── EffNetB5-preds.csv
+        ├── EffNetB5-mirror-preds.csv
+        ├── EffNetB6-preds.csv
+        ├── EffNetB6-mirror-preds.csv
+        ├── EffNetB7-preds.csv
+        ├── EffNetB7-mirror-preds.csv
+        ├── DetRS-valid.csv
+        ├── DetRS-mirror-valid.csv
+        ├── DetRS_resnet50-valid.csv
+        ├── DetRS_resnet50-mirror-valid.csv
+        └── yolov5x_tta.csv
 ```
 
-Expected extraction directory:
+## CSV files found
+
+No real CSV files were found because the archive was unavailable.
+
+## Expected CSV verification list and detector/model mapping
+
+The downloader verifies these expected benchmark files after extraction. The
+reproduction script maps each CSV to the detector/model name by stripping the
+`.csv` suffix.
+
+| Expected CSV file | Detector/model mapping | Row count | Column names |
+| --- | --- | ---: | --- |
+| `EffNetB0-preds.csv` | `EffNetB0-preds` | unavailable | unavailable |
+| `EffNetB0-mirror-preds.csv` | `EffNetB0-mirror-preds` | unavailable | unavailable |
+| `EffNetB1-preds.csv` | `EffNetB1-preds` | unavailable | unavailable |
+| `EffNetB1-mirror-preds.csv` | `EffNetB1-mirror-preds` | unavailable | unavailable |
+| `EffNetB2-preds.csv` | `EffNetB2-preds` | unavailable | unavailable |
+| `EffNetB2-mirror-preds.csv` | `EffNetB2-mirror-preds` | unavailable | unavailable |
+| `EffNetB3-preds.csv` | `EffNetB3-preds` | unavailable | unavailable |
+| `EffNetB3-mirror-preds.csv` | `EffNetB3-mirror-preds` | unavailable | unavailable |
+| `EffNetB4-preds.csv` | `EffNetB4-preds` | unavailable | unavailable |
+| `EffNetB4-mirror-preds.csv` | `EffNetB4-mirror-preds` | unavailable | unavailable |
+| `EffNetB5-preds.csv` | `EffNetB5-preds` | unavailable | unavailable |
+| `EffNetB5-mirror-preds.csv` | `EffNetB5-mirror-preds` | unavailable | unavailable |
+| `EffNetB6-preds.csv` | `EffNetB6-preds` | unavailable | unavailable |
+| `EffNetB6-mirror-preds.csv` | `EffNetB6-mirror-preds` | unavailable | unavailable |
+| `EffNetB7-preds.csv` | `EffNetB7-preds` | unavailable | unavailable |
+| `EffNetB7-mirror-preds.csv` | `EffNetB7-mirror-preds` | unavailable | unavailable |
+| `DetRS-valid.csv` | `DetRS-valid` | unavailable | unavailable |
+| `DetRS-mirror-valid.csv` | `DetRS-mirror-valid` | unavailable | unavailable |
+| `DetRS_resnet50-valid.csv` | `DetRS_resnet50-valid` | unavailable | unavailable |
+| `DetRS_resnet50-mirror-valid.csv` | `DetRS_resnet50-mirror-valid` | unavailable | unavailable |
+| `yolov5x_tta.csv` | `yolov5x_tta` | unavailable | unavailable |
+
+## Expected CSV schema used by reproduction
+
+When the archive is available, each CSV must contain these columns for the
+reproduction loader:
 
 ```text
-data/benchmark/benchmark/
+img_id,label,score,x1,x2,y1,y2
 ```
-
-## Exact files found
-
-No benchmark CSV files were found in this environment because the download was
-blocked before `benchmark.zip` could be cached or extracted.
-
-## Expected benchmark CSV files validated by the downloader
-
-The downloader validates these expected benchmark files after extraction:
-
-| CSV file | Detector/model name used by reproduction script |
-| --- | --- |
-| `EffNetB0-preds.csv` | `EffNetB0-preds` |
-| `EffNetB0-mirror-preds.csv` | `EffNetB0-mirror-preds` |
-| `EffNetB1-preds.csv` | `EffNetB1-preds` |
-| `EffNetB1-mirror-preds.csv` | `EffNetB1-mirror-preds` |
-| `EffNetB2-preds.csv` | `EffNetB2-preds` |
-| `EffNetB2-mirror-preds.csv` | `EffNetB2-mirror-preds` |
-| `EffNetB3-preds.csv` | `EffNetB3-preds` |
-| `EffNetB3-mirror-preds.csv` | `EffNetB3-mirror-preds` |
-| `EffNetB4-preds.csv` | `EffNetB4-preds` |
-| `EffNetB4-mirror-preds.csv` | `EffNetB4-mirror-preds` |
-| `EffNetB5-preds.csv` | `EffNetB5-preds` |
-| `EffNetB5-mirror-preds.csv` | `EffNetB5-mirror-preds` |
-| `EffNetB6-preds.csv` | `EffNetB6-preds` |
-| `EffNetB6-mirror-preds.csv` | `EffNetB6-mirror-preds` |
-| `EffNetB7-preds.csv` | `EffNetB7-preds` |
-| `EffNetB7-mirror-preds.csv` | `EffNetB7-mirror-preds` |
-| `DetRS-valid.csv` | `DetRS-valid` |
-| `DetRS-mirror-valid.csv` | `DetRS-mirror-valid` |
-| `DetRS_resnet50-valid.csv` | `DetRS_resnet50-valid` |
-| `DetRS_resnet50-mirror-valid.csv` | `DetRS_resnet50-mirror-valid` |
-| `yolov5x_tta.csv` | `yolov5x_tta` |
-
-## Rows/images/detections per CSV
-
-Not available from this environment because the real benchmark CSV files were
-not downloadable. In an environment with access to the release asset, run:
-
-```bash
-python scripts/download_benchmark.py --output-dir data/benchmark
-python scripts/reproduce_paper_results.py \
-  --download-benchmark \
-  --benchmark-dir data/benchmark \
-  --output-dir outputs/reproduction_benchmark
-```
-
-Then count rows/images/detections from each extracted CSV in
-`data/benchmark/benchmark/`.
 
 ## Annotations and AP/AR computation
 
-The benchmark release contains detector prediction CSV files, not COCO annotation
-JSON. Therefore AP/AR can only be computed if the user also supplies COCO
-annotations with `--annotations`, for example:
-
-```bash
-python scripts/reproduce_paper_results.py \
-  --download-benchmark \
-  --benchmark-dir data/benchmark \
-  --annotations data/coco/annotations/instances_val2017.json \
-  --output-dir outputs/reproduction_benchmark_eval
-```
-
-If annotations are not supplied, the reproduction script emits this explicit
-message:
+The benchmark archive is expected to contain detector prediction CSVs, not COCO
+annotation JSON. COCO AP/AR can only be computed when `--annotations` points to a
+COCO annotations file. Without annotations, the reproduction script does not fail
+after loading/fusing predictions and reports:
 
 ```text
-Benchmark predictions were loaded and fused, but COCO AP/AR cannot be computed without annotations.
-```
-
-## Outputs generated
-
-The smoke reproduction path was run successfully and generated the same fused
-output filenames that the benchmark path will produce after successful download:
-
-```text
-outputs/reproduction_sample/wbf_predictions.json
-outputs/reproduction_sample/awbf_predictions.json
-outputs/reproduction_sample/awbf_competition_predictions.json
-outputs/reproduction_sample/awbf_negotiation_predictions.json
-outputs/reproduction_sample/reproduction_report.json
-```
-
-For a successful benchmark run, the corresponding files are written under
-`outputs/reproduction_benchmark/`:
-
-```text
-outputs/reproduction_benchmark/wbf_predictions.json
-outputs/reproduction_benchmark/awbf_predictions.json
-outputs/reproduction_benchmark/awbf_competition_predictions.json
-outputs/reproduction_benchmark/awbf_negotiation_predictions.json
-outputs/reproduction_benchmark/reproduction_report.json
+COCO AP/AR metrics cannot be computed because annotations are missing.
 ```

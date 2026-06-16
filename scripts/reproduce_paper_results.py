@@ -92,21 +92,22 @@ def main():
     ap.add_argument('--annotations'); ap.add_argument('--predictions-dir'); ap.add_argument('--output-dir',default='outputs/reproduction')
     ap.add_argument('--download-benchmark', action='store_true', help='Download/extract the WBF benchmark if required files are missing')
     ap.add_argument('--benchmark-zip', help='Use a manually downloaded local benchmark.zip instead of downloading from GitHub')
-    ap.add_argument('--benchmark-dir', default='data/benchmark', help='Directory containing benchmark.zip and benchmark/ extraction')
+    ap.add_argument('--benchmark-dir', help='Directory containing benchmark.zip and benchmark/ extraction')
     ap.add_argument('--sample', action='store_true'); ap.add_argument('--iou-threshold',type=float,default=.55); ap.add_argument('--score-threshold',type=float,default=0.0)
     ap.add_argument('--cooperation-threshold',type=float,default=.5); ap.add_argument('--negotiation-threshold',type=float,default=.05); ap.add_argument('--rounds',type=int,default=5); ap.add_argument('--weight',type=float,default=.3)
     args=ap.parse_args()
     if args.sample:
         by_model=sample_predictions()
-    elif args.download_benchmark or args.benchmark_zip:
-        benchmark_extract = Path(args.benchmark_dir) / 'benchmark'
+    elif args.download_benchmark or args.benchmark_zip or args.benchmark_dir:
+        benchmark_dir = args.benchmark_dir or 'data/benchmark'
+        benchmark_extract = Path(benchmark_dir) / 'benchmark'
         try:
             validate_benchmark_files(benchmark_extract)
         except FileNotFoundError:
-            ensure_benchmark(args.benchmark_dir, benchmark_zip=args.benchmark_zip)
-        by_model=load_benchmark_predictions(args.benchmark_dir)
+            ensure_benchmark(benchmark_dir, benchmark_zip=args.benchmark_zip)
+        by_model=load_benchmark_predictions(benchmark_dir)
     else:
-        if not args.predictions_dir: raise SystemExit('--predictions-dir is required unless --sample, --download-benchmark, or --benchmark-zip is used')
+        if not args.predictions_dir: raise SystemExit('--predictions-dir is required unless --sample, --benchmark-dir, --download-benchmark, or --benchmark-zip is used')
         by_model=load_predictions(args.predictions_dir)
     os.makedirs(args.output_dir,exist_ok=True)
     outputs=fuse_all(by_model,args); report={'paper_targets':PAPER_TARGETS,'metrics':{},'notes':[]}
@@ -120,7 +121,7 @@ def main():
             report['metrics'][method]={'detections':sum(len(v) for v in dets.values()),'evaluation':'skipped: provide --annotations for COCO metrics'}
     if args.sample: report['notes'].append('Sample mode validates fusion/export only; it cannot reproduce paper metrics without COCO annotations and detector predictions.')
     if not args.annotations:
-        message = 'Benchmark predictions were loaded and fused, but COCO AP/AR cannot be computed without annotations.' if (args.download_benchmark or args.benchmark_zip) else 'COCO AP/AR evaluation skipped because --annotations was not supplied; fusion/export does not require full COCO annotations.'
+        message = 'COCO AP/AR metrics cannot be computed because annotations are missing.' if (args.download_benchmark or args.benchmark_zip or args.benchmark_dir) else 'COCO AP/AR evaluation skipped because --annotations was not supplied; fusion/export does not require full COCO annotations.'
         report['notes'].append(message)
     Path(args.output_dir,'reproduction_report.json').write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2))

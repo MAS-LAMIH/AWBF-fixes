@@ -90,7 +90,7 @@ python scripts/reproduce_paper_results.py \
 This command downloads/extracts the benchmark only if expected files are missing,
 runs WBF/AWBF/AWBF-competition/AWBF-Negotiation fusion, writes COCO-format
 prediction JSONs, and stores `outputs/reproduction_benchmark/reproduction_report.json`.
-Because no COCO annotations are supplied, AP/AR metric evaluation is skipped.
+Because no COCO annotations are supplied, AP/AR metric evaluation is skipped with: `COCO AP/AR metrics cannot be computed because annotations are missing.`
 
 ### Run full COCO metric evaluation
 

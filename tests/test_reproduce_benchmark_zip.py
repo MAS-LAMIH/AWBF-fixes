@@ -30,7 +30,7 @@ def test_reproduce_uses_local_benchmark_zip(tmp_path):
         capture_output=True,
         text=True,
     )
-    assert "Benchmark predictions were loaded and fused" in result.stdout
+    assert "COCO AP/AR metrics cannot be computed because annotations are missing" in result.stdout
     for filename in [
         "wbf_predictions.json",
         "awbf_predictions.json",
@@ -40,4 +40,4 @@ def test_reproduce_uses_local_benchmark_zip(tmp_path):
     ]:
         assert (output_dir / filename).is_file()
     report = json.loads((output_dir / "reproduction_report.json").read_text())
-    assert report["notes"] == ["Benchmark predictions were loaded and fused, but COCO AP/AR cannot be computed without annotations."]
+    assert report["notes"] == ["COCO AP/AR metrics cannot be computed because annotations are missing."]
