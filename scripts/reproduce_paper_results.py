@@ -26,6 +26,13 @@ PAPER_TARGETS={
  'AWBF-Negotiation': {'AP':0.626,'AP50':0.684,'AP75':0.640},
 }
 
+OUTPUT_FILENAMES = {
+    'WBF': 'wbf_predictions.json',
+    'AWBF': 'awbf_predictions.json',
+    'AWBF-competition': 'awbf_competition_predictions.json',
+    'AWBF-Negotiation': 'awbf_negotiation_predictions.json',
+}
+
 def xywh_to_xyxy(b): return (float(b[0]), float(b[1]), float(b[0])+float(b[2]), float(b[1])+float(b[3]))
 
 def load_predictions(predictions_dir):
@@ -103,7 +110,7 @@ def main():
     os.makedirs(args.output_dir,exist_ok=True)
     outputs=fuse_all(by_model,args); report={'paper_targets':PAPER_TARGETS,'metrics':{},'notes':[]}
     for method,dets in outputs.items():
-        pred_path=os.path.join(args.output_dir,f'{method}.json')
+        pred_path=os.path.join(args.output_dir,OUTPUT_FILENAMES[method])
         export_coco_detections(dets,pred_path)
         if args.annotations:
             metrics=evaluate_coco(args.annotations,pred_path)
@@ -111,7 +118,9 @@ def main():
         else:
             report['metrics'][method]={'detections':sum(len(v) for v in dets.values()),'evaluation':'skipped: provide --annotations for COCO metrics'}
     if args.sample: report['notes'].append('Sample mode validates fusion/export only; it cannot reproduce paper metrics without COCO annotations and detector predictions.')
-    if not args.annotations: report['notes'].append('COCO AP/AR evaluation skipped because --annotations was not supplied; fusion/export does not require full COCO annotations.')
+    if not args.annotations:
+        message = 'Benchmark predictions were loaded and fused, but COCO AP/AR cannot be computed without annotations.' if args.download_benchmark else 'COCO AP/AR evaluation skipped because --annotations was not supplied; fusion/export does not require full COCO annotations.'
+        report['notes'].append(message)
     Path(args.output_dir,'reproduction_report.json').write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2))
 if __name__=='__main__': main()
