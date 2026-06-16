@@ -1,5 +1,6 @@
 import unittest
-import numpy as np
+import pytest
+np = pytest.importorskip("numpy")
 from ensemble_boxes import *
 
 
