@@ -130,5 +130,8 @@ and evaluating COCO metrics. Adjust image-level fusion progress frequency with:
 python scripts/reproduce_paper_results.py \
   --benchmark-dir data/benchmark \
   --output-dir outputs/reproduction_benchmark \
-  --progress-interval 25
+  --progress-interval 25 \
+  --profile
 ```
+
+`--profile` adds per-strategy timings and per-negotiation-pass comparison counts.

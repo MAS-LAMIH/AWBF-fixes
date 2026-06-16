@@ -8,7 +8,7 @@ exports WBF, AWBF, AWBF-competition, and AWBF-Negotiation results, then evaluate
 with pycocotools when annotations are supplied.
 """
 from __future__ import annotations
-import argparse, csv, json, os, sys
+import argparse, csv, json, os, sys, time
 from collections import defaultdict
 from pathlib import Path
 
@@ -32,6 +32,23 @@ OUTPUT_FILENAMES = {
     'AWBF-competition': 'awbf_competition_predictions.json',
     'AWBF-Negotiation': 'awbf_negotiation_predictions.json',
 }
+
+def format_duration(seconds):
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, sec = divmod(int(seconds), 60)
+    if minutes < 60:
+        return f"{minutes}m {sec}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m"
+
+def estimate_eta(start_time, completed, total):
+    if completed <= 0:
+        return "unknown"
+    elapsed = time.perf_counter() - start_time
+    remaining = max(0, total - completed)
+    return format_duration((elapsed / completed) * remaining)
 
 def xywh_to_xyxy(b): return (float(b[0]), float(b[1]), float(b[0])+float(b[2]), float(b[1])+float(b[3]))
 
@@ -83,20 +100,74 @@ def sample_predictions():
 def fuse_all(by_model, args):
     image_ids=sorted({i for model in by_model.values() for i in model})
     outputs={k:{} for k in PAPER_TARGETS}
+    timings={k: 0.0 for k in PAPER_TARGETS}
     total = len(image_ids)
     interval = max(1, args.progress_interval)
+    run_start = time.perf_counter()
     print(f"Fusing predictions for {total} images using {len(by_model)} detector/model files", flush=True)
     for index, image_id in enumerate(image_ids, start=1):
-        if index == 1 or index == total or index % interval == 0:
-            print(f"  fusion progress: {index}/{total} images", flush=True)
         per_model={m: imgs.get(image_id, []) for m, imgs in by_model.items()}
         flat=[d for ds in per_model.values() for d in ds]
+        box_count = len(flat)
+        pair_comparisons = box_count * (box_count - 1) // 2
+        should_report = args.profile or index == 1 or index == total or index % interval == 0
+        if should_report:
+            print(
+                f"image {index}/{total} image_id={image_id} boxes={box_count} "
+                f"pair_comparisons_per_scan={pair_comparisons} elapsed={format_duration(time.perf_counter() - run_start)} "
+                f"ETA={estimate_eta(run_start, index - 1, total) if index > 1 else 'unknown'}",
+                flush=True,
+            )
+
+        start = time.perf_counter()
         outputs['WBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+        timings['WBF'] += time.perf_counter() - start
+
+        start = time.perf_counter()
         outputs['AWBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+        timings['AWBF'] += time.perf_counter() - start
+
+        start = time.perf_counter()
         outputs['AWBF-competition'][image_id]=awbf_competition(flat,args.iou_threshold,args.cooperation_threshold)
-        outputs['AWBF-Negotiation'][image_id]=awbf_negotiation(flat,args.iou_threshold,args.rounds,args.weight,args.negotiation_threshold)
+        timings['AWBF-competition'] += time.perf_counter() - start
+
+        def negotiation_progress(event):
+            if args.profile:
+                elapsed = time.perf_counter() - run_start
+                print(
+                    f"  negotiation image {index}/{total} round={event['pass']}/? "
+                    f"remaining_boxes={event['remaining_boxes']} "
+                    f"comparisons={event['total_comparisons']} "
+                    f"last_round_comparisons={event['pass_comparisons']} "
+                    f"elapsed={format_duration(elapsed)} ETA={estimate_eta(run_start, index - 1, total) if index > 1 else 'unknown'}",
+                    flush=True,
+                )
+
+        start = time.perf_counter()
+        outputs['AWBF-Negotiation'][image_id]=awbf_negotiation(
+            flat,
+            args.iou_threshold,
+            args.rounds,
+            args.weight,
+            args.negotiation_threshold,
+            progress_callback=negotiation_progress if args.profile else None,
+        )
+        timings['AWBF-Negotiation'] += time.perf_counter() - start
+
+        if args.profile:
+            print(
+                f"  timings image {index}/{total}: "
+                f"WBF={format_duration(timings['WBF'])} total, "
+                f"AWBF={format_duration(timings['AWBF'])} total, "
+                f"Competition={format_duration(timings['AWBF-competition'])} total, "
+                f"Negotiation={format_duration(timings['AWBF-Negotiation'])} total",
+                flush=True,
+            )
     print("Fusion complete", flush=True)
-    return outputs
+    print("Fusion timing summary:", flush=True)
+    for method, elapsed in timings.items():
+        print(f"  {method}: {format_duration(elapsed)}", flush=True)
+    return outputs, timings
 
 def main():
     ap=argparse.ArgumentParser()
@@ -107,6 +178,7 @@ def main():
     ap.add_argument('--sample', action='store_true'); ap.add_argument('--iou-threshold',type=float,default=.55); ap.add_argument('--score-threshold',type=float,default=0.0)
     ap.add_argument('--cooperation-threshold',type=float,default=.5); ap.add_argument('--negotiation-threshold',type=float,default=.05); ap.add_argument('--rounds',type=int,default=5); ap.add_argument('--weight',type=float,default=.3)
     ap.add_argument('--progress-interval', type=int, default=100, help='Print fusion progress every N images')
+    ap.add_argument('--profile', action='store_true', help='Print detailed per-image/per-strategy timing and AWBF negotiation progress')
     args=ap.parse_args()
     if args.sample:
         by_model=sample_predictions()
@@ -122,7 +194,7 @@ def main():
         if not args.predictions_dir: raise SystemExit('--predictions-dir is required unless --sample, --benchmark-dir, --download-benchmark, or --benchmark-zip is used')
         by_model=load_predictions(args.predictions_dir)
     os.makedirs(args.output_dir,exist_ok=True)
-    outputs=fuse_all(by_model,args); report={'paper_targets':PAPER_TARGETS,'metrics':{},'notes':[]}
+    outputs,timings=fuse_all(by_model,args); report={'paper_targets':PAPER_TARGETS,'metrics':{},'timings_seconds':timings,'notes':[]}
     for method,dets in outputs.items():
         pred_path=os.path.join(args.output_dir,OUTPUT_FILENAMES[method])
         total_detections = sum(len(v) for v in dets.values())

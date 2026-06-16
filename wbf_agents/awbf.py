@@ -6,7 +6,7 @@ explicitly says xywh. COCO export converts to xywh.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 import json
 import math
 import os
@@ -140,13 +140,26 @@ def negotiate_pair(a: Detection, b: Detection, rmax: int = 5, w: float = 0.3, th
     return current, updates
 
 
-def awbf_negotiation(detections: Sequence[Detection], iou_thr: float = 0.55, rmax: int = 5, w: float = 0.3, threshold: float = 0.05) -> List[Detection]:
+def awbf_negotiation(
+    detections: Sequence[Detection],
+    iou_thr: float = 0.55,
+    rmax: int = 5,
+    w: float = 0.3,
+    threshold: float = 0.05,
+    progress_callback: Callable[[Dict[str, Any]], None] | None = None,
+) -> List[Detection]:
     remaining = list(detections)
     changed = True
+    pass_num = 0
+    total_comparisons = 0
     while changed:
+        pass_num += 1
         changed = False
+        pass_comparisons = 0
         for i in range(len(remaining)):
             for j in range(i + 1, len(remaining)):
+                pass_comparisons += 1
+                total_comparisons += 1
                 if remaining[i].label == remaining[j].label and iou(remaining[i].box, remaining[j].box) >= iou_thr:
                     fused, _updates = negotiate_pair(remaining[i], remaining[j], rmax=rmax, w=w, threshold=threshold)
                     remaining = [d for k, d in enumerate(remaining) if k not in (i, j)] + [fused]
@@ -154,6 +167,15 @@ def awbf_negotiation(detections: Sequence[Detection], iou_thr: float = 0.55, rma
                     break
             if changed:
                 break
+        if progress_callback is not None:
+            progress_callback({
+                "pass": pass_num,
+                "remaining_boxes": len(remaining),
+                "pass_comparisons": pass_comparisons,
+                "total_comparisons": total_comparisons,
+                "changed": changed,
+                "rmax": rmax,
+            })
     return remaining
 
 
