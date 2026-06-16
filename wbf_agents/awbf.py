@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 import json
 import math
 import os
+import warnings
 
 
 
@@ -227,19 +228,89 @@ def awbf_negotiation(
     return remaining
 
 
+def load_coco_image_sizes(annotations_json: str) -> Dict[int, Tuple[float, float]]:
+    with open(annotations_json, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return {int(img["id"]): (float(img["width"]), float(img["height"])) for img in data.get("images", [])}
+
+
+def bbox_xywh_looks_normalized(bbox: Sequence[float]) -> bool:
+    x, y, w, h = [float(v) for v in bbox]
+    return 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and 0.0 <= w <= 1.0 and 0.0 <= h <= 1.0
+
+
+def convert_coco_detection_bboxes(
+    rows: Sequence[Dict[str, Any]],
+    image_sizes: Mapping[int, Tuple[float, float]] | None = None,
+    bbox_scale: str = "pixel",
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if bbox_scale not in {"auto", "normalized", "pixel"}:
+        raise ValueError("bbox_scale must be one of: auto, normalized, pixel")
+    converted_rows: List[Dict[str, Any]] = []
+    stats: Dict[str, Any] = {
+        "bbox_scale_mode": bbox_scale,
+        "boxes_converted_to_pixel": 0,
+        "boxes_left_unchanged": 0,
+        "missing_image_ids": [],
+        "small_width_height_boxes": 0,
+    }
+    missing_ids = set()
+    normalized_in_pixel_mode = 0
+
+    for row in rows:
+        out = dict(row)
+        bbox = [float(v) for v in out["bbox"]]
+        image_id = int(out["image_id"])
+        looks_normalized = bbox_xywh_looks_normalized(bbox)
+        should_convert = bbox_scale == "normalized" or (bbox_scale == "auto" and looks_normalized)
+
+        if bbox_scale == "pixel" and looks_normalized:
+            normalized_in_pixel_mode += 1
+
+        if should_convert:
+            if not image_sizes or image_id not in image_sizes:
+                missing_ids.add(image_id)
+                stats["boxes_left_unchanged"] += 1
+            else:
+                width, height = image_sizes[image_id]
+                out["bbox"] = [bbox[0] * width, bbox[1] * height, bbox[2] * width, bbox[3] * height]
+                stats["boxes_converted_to_pixel"] += 1
+        else:
+            stats["boxes_left_unchanged"] += 1
+
+        if out["bbox"][2] <= 1.0 or out["bbox"][3] <= 1.0:
+            stats["small_width_height_boxes"] += 1
+        converted_rows.append(out)
+
+    stats["missing_image_ids"] = sorted(missing_ids)
+    if missing_ids:
+        warnings.warn(f"Missing image_id(s) in annotations for bbox scaling: {sorted(missing_ids)}")
+    if normalized_in_pixel_mode:
+        warnings.warn("bbox values look normalized while --bbox-scale pixel is selected")
+    if converted_rows and stats["small_width_height_boxes"] / len(converted_rows) >= 0.5:
+        warnings.warn("Many exported/evaluated bboxes have width/height <= 1.0; check --bbox-scale")
+    return converted_rows, stats
+
 def xyxy_to_xywh(box: Sequence[float]) -> List[float]:
     return [float(box[0]), float(box[1]), max(0.0, float(box[2]) - float(box[0])), max(0.0, float(box[3]) - float(box[1]))]
 
 
-def export_coco_detections(detections_by_image: Mapping[int, Sequence[Detection]], output_json: str) -> List[Dict[str, Any]]:
+def export_coco_detections(
+    detections_by_image: Mapping[int, Sequence[Detection]],
+    output_json: str,
+    image_sizes: Mapping[int, Tuple[float, float]] | None = None,
+    bbox_scale: str = "pixel",
+    return_stats: bool = False,
+) -> List[Dict[str, Any]] | Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     rows = []
     for image_id, detections in detections_by_image.items():
         for d in detections:
             rows.append({"image_id": int(image_id), "category_id": int(d.label), "bbox": xyxy_to_xywh(d.box), "score": float(min(1.0, max(0.0, d.score)))})
+    rows, stats = convert_coco_detection_bboxes(rows, image_sizes=image_sizes, bbox_scale=bbox_scale)
     os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
     with open(output_json, "w", encoding="utf-8") as f:
         json.dump(rows, f, indent=2)
-    return rows
+    return (rows, stats) if return_stats else rows
 
 
 def evaluate_coco(annotations_json: str, detections_json: str) -> Dict[str, float]:

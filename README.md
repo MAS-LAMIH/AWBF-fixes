@@ -98,10 +98,10 @@ Provide COCO annotations when you want AP/AR metrics:
 
 ```bash
 python scripts/reproduce_paper_results.py \
-  --download-benchmark \
   --benchmark-dir data/benchmark \
   --annotations data/coco/annotations/instances_val2017.json \
-  --output-dir outputs/reproduction_benchmark_eval
+  --bbox-scale auto \
+  --output-dir outputs/reproduction_benchmark
 ```
 
 You can also bypass the benchmark downloader and provide your own COCO detection
@@ -143,13 +143,16 @@ benchmark CSVs or running fusion:
 
 ```bash
 python scripts/reproduce_paper_results.py \
-  --evaluate-predictions \
-    outputs/reproduction_benchmark/wbf_predictions.json \
-    outputs/reproduction_benchmark/awbf_predictions.json \
-    outputs/reproduction_benchmark/awbf_competition_predictions.json \
-    outputs/reproduction_benchmark/awbf_negotiation_predictions.json \
-  --annotations data/coco/annotations/instances_val2017.json
+  --annotations data/coco/annotations/instances_val2017.json \
+  --evaluate-predictions outputs/reproduction_benchmark/wbf_predictions.json \
+  --bbox-scale auto \
+  --output-dir outputs/eval_wbf
 ```
 
-Direct evaluation mode requires `--annotations`, prints metrics for each input
-file, and saves `outputs/evaluation_report.json`.
+Benchmark CSVs and some exported prediction JSONs may contain normalized COCO
+`xywh` coordinates in `[0, 1]`; COCO evaluation requires pixel-space `xywh`. Use
+`--bbox-scale auto` to convert normalized boxes using image width/height from the
+annotations file. Direct evaluation mode requires `--annotations`, prints metrics
+for each input file, saves converted files like
+`outputs/eval_wbf/wbf_predictions_pixel_xywh.json` when conversion is needed, and
+writes `outputs/eval_wbf/evaluation_report.json`.

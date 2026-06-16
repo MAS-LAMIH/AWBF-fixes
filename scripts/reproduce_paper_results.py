@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, cluster_detections_by_label_and_iou, cluster_stats, decentralized_wbf, evaluate_coco, export_coco_detections
+from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, cluster_detections_by_label_and_iou, cluster_stats, convert_coco_detection_bboxes, decentralized_wbf, evaluate_coco, export_coco_detections, load_coco_image_sizes
 from scripts.download_benchmark import EXPECTED_FILES, ensure_benchmark, find_expected_file, validate_benchmark_files
 
 PAPER_TARGETS={
@@ -221,6 +221,7 @@ def fuse_all(by_model, args):
 def main(argv=None):
     ap=argparse.ArgumentParser()
     ap.add_argument('--annotations'); ap.add_argument('--predictions-dir'); ap.add_argument('--output-dir',default='outputs/reproduction')
+    ap.add_argument('--bbox-scale', choices=['auto', 'normalized', 'pixel'], default='auto', help='Scale COCO xywh boxes: auto detects normalized boxes, normalized always scales, pixel leaves unchanged')
     ap.add_argument('--evaluate-predictions', nargs='+', help='Evaluate one or more existing COCO detection JSON files and skip benchmark loading/fusion')
     ap.add_argument('--download-benchmark', action='store_true', help='Download/extract the WBF benchmark if required files are missing')
     ap.add_argument('--benchmark-zip', help='Use a manually downloaded local benchmark.zip instead of downloading from GitHub')
@@ -234,16 +235,28 @@ def main(argv=None):
     if args.evaluate_predictions:
         if not args.annotations:
             raise SystemExit("--annotations is required with --evaluate-predictions")
-        report = {"annotations": args.annotations, "metrics": {}}
+        image_sizes = load_coco_image_sizes(args.annotations)
+        report = {"annotations": args.annotations, "bbox_scale_mode": args.bbox_scale, "metrics": {}, "bbox_reports": {}}
+        eval_output_dir = Path(args.output_dir) if args.output_dir != 'outputs/reproduction' else Path('outputs')
+        eval_output_dir.mkdir(parents=True, exist_ok=True)
         for prediction_json in args.evaluate_predictions:
-            print(f"Evaluating predictions: {prediction_json}", flush=True)
-            metrics = evaluate_coco(args.annotations, prediction_json)
+            with open(prediction_json, "r", encoding="utf-8") as f:
+                original_rows = json.load(f)
+            converted_rows, bbox_stats = convert_coco_detection_bboxes(original_rows, image_sizes=image_sizes, bbox_scale=args.bbox_scale)
+            eval_file = prediction_json
+            if bbox_stats["boxes_converted_to_pixel"] > 0:
+                eval_file = str(eval_output_dir / f"{Path(prediction_json).stem}_pixel_xywh.json")
+                with open(eval_file, "w", encoding="utf-8") as f:
+                    json.dump(converted_rows, f, indent=2)
+                bbox_stats["converted_prediction_file"] = eval_file
+            print(f"Evaluating predictions: {eval_file}", flush=True)
+            metrics = evaluate_coco(args.annotations, eval_file)
             report["metrics"][prediction_json] = metrics
+            report["bbox_reports"][prediction_json] = bbox_stats
             print(f"Metrics for {prediction_json}:", flush=True)
             for key, value in metrics.items():
                 print(f"  {key}: {value:.6f}", flush=True)
-        report_path = Path("outputs/evaluation_report.json")
-        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path = eval_output_dir / "evaluation_report.json"
         report_path.write_text(json.dumps(report, indent=2))
         print(f"Saved evaluation report to {report_path}", flush=True)
         return report
@@ -261,12 +274,14 @@ def main(argv=None):
         if not args.predictions_dir: raise SystemExit('--predictions-dir is required unless --sample, --benchmark-dir, --download-benchmark, or --benchmark-zip is used')
         by_model=load_predictions(args.predictions_dir)
     os.makedirs(args.output_dir,exist_ok=True)
-    outputs,timings=fuse_all(by_model,args); report={'paper_targets':PAPER_TARGETS,'metrics':{},'timings_seconds':timings,'notes':[]}
+    image_sizes = load_coco_image_sizes(args.annotations) if args.annotations else None
+    outputs,timings=fuse_all(by_model,args); report={'paper_targets':PAPER_TARGETS,'metrics':{},'bbox_scale_mode':args.bbox_scale,'bbox_reports':{},'timings_seconds':timings,'notes':[]}
     for method,dets in outputs.items():
         pred_path=os.path.join(args.output_dir,OUTPUT_FILENAMES[method])
         total_detections = sum(len(v) for v in dets.values())
         print(f"Exporting {method}: {total_detections} detections -> {pred_path}", flush=True)
-        export_coco_detections(dets,pred_path)
+        _rows, bbox_stats = export_coco_detections(dets,pred_path,image_sizes=image_sizes,bbox_scale=args.bbox_scale,return_stats=True)
+        report['bbox_reports'][method] = bbox_stats
         if args.annotations:
             print(f"Evaluating {method} with COCO annotations {args.annotations}", flush=True)
             metrics=evaluate_coco(args.annotations,pred_path)
