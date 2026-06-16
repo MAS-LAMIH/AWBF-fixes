@@ -40,3 +40,30 @@ def test_missing_file_error_message(tmp_path):
     extract_dir.mkdir()
     with pytest.raises(FileNotFoundError, match=EXPECTED_FILES[0]):
         validate_benchmark_files(extract_dir)
+
+from scripts.download_benchmark import ensure_benchmark, use_local_benchmark_zip
+
+
+def _write_minimal_benchmark_zip(path):
+    row = "img_id,label,score,x1,x2,y1,y2\n1,1,0.9,0.0,1.0,0.0,1.0\n"
+    with zipfile.ZipFile(path, "w") as zf:
+        for name in EXPECTED_FILES:
+            zf.writestr(name, row)
+
+
+def test_local_zip_input_is_copied_extracted_and_validated(tmp_path, monkeypatch):
+    local_zip = tmp_path / "manual_benchmark.zip"
+    _write_minimal_benchmark_zip(local_zip)
+    output_dir = tmp_path / "cache"
+
+    def fail_urlretrieve(_url, _path):
+        raise AssertionError("urlretrieve should not be called for --benchmark-zip")
+
+    monkeypatch.setattr("scripts.download_benchmark.urlretrieve", fail_urlretrieve)
+    cached_zip = use_local_benchmark_zip(output_dir, local_zip)
+    assert cached_zip == output_dir / "benchmark.zip"
+    assert cached_zip.read_bytes() == local_zip.read_bytes()
+
+    extract_dir = ensure_benchmark(output_dir, benchmark_zip=local_zip)
+    validated = validate_benchmark_files(extract_dir)
+    assert len(validated) == len(EXPECTED_FILES)

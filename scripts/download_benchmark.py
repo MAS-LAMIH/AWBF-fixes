@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -42,6 +43,23 @@ def benchmark_zip_path(output_dir: str | Path) -> Path:
 
 def benchmark_extract_dir(output_dir: str | Path) -> Path:
     return Path(output_dir) / EXTRACT_DIR_NAME
+
+
+def use_local_benchmark_zip(output_dir: str | Path, benchmark_zip: str | Path) -> Path:
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    source = Path(benchmark_zip)
+    if not source.is_file():
+        raise FileNotFoundError(f"Local benchmark zip not found: {source}")
+    with zipfile.ZipFile(source) as zf:
+        zf.testzip()
+    destination = benchmark_zip_path(output)
+    if source.resolve() != destination.resolve():
+        shutil.copyfile(source, destination)
+        print(f"Copied local benchmark archive from {source} to {destination}")
+    else:
+        print(f"Using local benchmark archive: {destination}")
+    return destination
 
 
 def download_benchmark_zip(output_dir: str | Path, url: str = BENCHMARK_URL) -> Path:
@@ -90,8 +108,8 @@ def validate_benchmark_files(extract_dir: str | Path, expected_files: tuple[str,
     return [find_expected_file(extract_dir, name) for name in expected_files if find_expected_file(extract_dir, name) is not None]
 
 
-def ensure_benchmark(output_dir: str | Path) -> Path:
-    zip_path = download_benchmark_zip(output_dir)
+def ensure_benchmark(output_dir: str | Path, benchmark_zip: str | Path | None = None) -> Path:
+    zip_path = use_local_benchmark_zip(output_dir, benchmark_zip) if benchmark_zip else download_benchmark_zip(output_dir)
     extract_dir = benchmark_extract_dir(output_dir)
     try:
         validate_benchmark_files(extract_dir)
@@ -108,8 +126,9 @@ def ensure_benchmark(output_dir: str | Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", default="data/benchmark", help="Directory for benchmark.zip and extracted benchmark/ files")
+    parser.add_argument("--benchmark-zip", help="Use a manually downloaded local benchmark.zip instead of downloading from GitHub")
     args = parser.parse_args(argv)
-    ensure_benchmark(args.output_dir)
+    ensure_benchmark(args.output_dir, benchmark_zip=args.benchmark_zip)
     return 0
 
 

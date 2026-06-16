@@ -48,6 +48,15 @@ are computed only when `--annotations` points to a COCO annotations JSON.
 python scripts/download_benchmark.py --output-dir data/benchmark
 ```
 
+For a manually downloaded archive, skip the network download and extract/validate
+the local file instead:
+
+```bash
+python scripts/download_benchmark.py \
+  --benchmark-zip /path/to/benchmark.zip \
+  --output-dir data/benchmark
+```
+
 This downloads `benchmark.zip` from:
 
 ```text
@@ -64,6 +73,16 @@ CSV files after extraction.
 ```bash
 python scripts/reproduce_paper_results.py \
   --download-benchmark \
+  --benchmark-dir data/benchmark \
+  --output-dir outputs/reproduction_benchmark
+```
+
+If you manually downloaded `benchmark.zip` (for example on a machine with browser
+access to GitHub release assets), use the local zip directly:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-zip /path/to/benchmark.zip \
   --benchmark-dir data/benchmark \
   --output-dir outputs/reproduction_benchmark
 ```
