@@ -51,3 +51,53 @@ def test_reproduce_uses_local_benchmark_zip(tmp_path):
     assert "AWBF-Negotiation-IncrementalState" in report["timings_seconds"]
     assert "method_equivalence_audit" in report
     assert report["notes"] == ["COCO AP/AR metrics cannot be computed because annotations are missing."]
+
+
+def test_reproduce_can_run_only_incremental_awbf(tmp_path):
+    output_dir = tmp_path / "outputs"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/reproduce_paper_results.py",
+            "--sample",
+            "--methods",
+            "Incremental_AWBF",
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "Exporting Incremental_AWBF" in result.stdout
+    assert (output_dir / "incremental_awbf_predictions.json").is_file()
+    assert not (output_dir / "wbf_predictions.json").exists()
+    report = json.loads((output_dir / "reproduction_report.json").read_text())
+    assert report["selected_methods"] == ["Incremental_AWBF"]
+    assert list(report["metrics"]) == ["Incremental_AWBF"]
+    assert list(report["timings_seconds"]) == ["Incremental_AWBF"]
+
+
+def test_reproduce_can_run_several_selected_methods(tmp_path):
+    output_dir = tmp_path / "outputs"
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/reproduce_paper_results.py",
+            "--sample",
+            "--methods",
+            "WBF",
+            "Incremental_AWBF",
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert (output_dir / "wbf_predictions.json").is_file()
+    assert (output_dir / "incremental_awbf_predictions.json").is_file()
+    assert not (output_dir / "awbf_predictions.json").exists()
+    report = json.loads((output_dir / "reproduction_report.json").read_text())
+    assert report["selected_methods"] == ["WBF", "Incremental_AWBF"]
+    assert set(report["metrics"]) == {"WBF", "Incremental_AWBF"}

@@ -136,6 +136,45 @@ python scripts/reproduce_paper_results.py \
 
 `--profile` adds per-strategy timings, cluster statistics, and per-negotiation-pass comparison counts. Pre-clustering is enabled by default; add `--disable-preclustering` only when you need to compare against the previous global per-image behavior.
 
+
+### Selecting fusion methods
+
+Use `--methods` to run one method, several methods, or `all` (the default).
+This is useful when you only need to rerun a slow or experimental variant.
+
+Run only Incremental_AWBF:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-dir data/benchmark \
+  --annotations data/coco/annotations/instances_val2017.json \
+  --bbox-scale auto \
+  --methods Incremental_AWBF \
+  --output-dir outputs/reproduction_incremental_awbf
+```
+
+Run WBF and Incremental_AWBF only:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-dir data/benchmark \
+  --methods WBF Incremental_AWBF \
+  --output-dir outputs/reproduction_wbf_incremental
+```
+
+Run all methods explicitly:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-dir data/benchmark \
+  --methods all \
+  --output-dir outputs/reproduction_benchmark
+```
+
+Valid method names are `WBF`, `AWBF`, `Incremental_AWBF`,
+`AWBF-competition`, `AWBF-competition-IncrementalState`,
+`AWBF-Negotiation`, and `AWBF-Negotiation-IncrementalState`.
+
 ### Direct evaluation of existing COCO prediction JSONs
 
 If fused prediction JSONs already exist, evaluate them directly without loading

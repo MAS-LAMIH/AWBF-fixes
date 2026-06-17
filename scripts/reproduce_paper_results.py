@@ -38,6 +38,20 @@ OUTPUT_FILENAMES = {
     'AWBF-Negotiation-IncrementalState': 'awbf_negotiation_incremental_state_predictions.json',
     'Incremental_AWBF': 'incremental_awbf_predictions.json',
 }
+METHOD_NAMES = tuple(PAPER_TARGETS.keys())
+METHOD_CHOICES = ('all',) + METHOD_NAMES
+
+def resolve_methods(requested_methods):
+    requested_methods = requested_methods or ['all']
+    if 'all' in requested_methods:
+        return list(METHOD_NAMES)
+    selected = []
+    for method in requested_methods:
+        if method not in METHOD_NAMES:
+            raise ValueError(f"Unknown method {method!r}. Choose from: {', '.join(METHOD_CHOICES)}")
+        if method not in selected:
+            selected.append(method)
+    return selected
 
 def format_duration(seconds):
     seconds = max(0.0, float(seconds))
@@ -107,7 +121,7 @@ def build_method_equivalence_audit(outputs):
         ("AWBF-competition", "AWBF-competition-IncrementalState"),
         ("AWBF-Negotiation", "AWBF-Negotiation-IncrementalState"),
     ]
-    return {f"{a} vs {b}": compare_method_outputs(outputs, a, b) for a, b in pairs}
+    return {f"{a} vs {b}": compare_method_outputs(outputs, a, b) for a, b in pairs if a in outputs and b in outputs}
 
 def write_method_equivalence_audit(path, audit, method_counts):
     lines = [
@@ -120,11 +134,14 @@ def write_method_equivalence_audit(path, audit, method_counts):
         "| Comparison | Count A | Count B | Max coordinate difference | Max score difference | Result |",
         "| --- | ---: | ---: | ---: | ---: | --- |",
     ]
-    for name, row in audit.items():
-        lines.append(
-            f"| {name} | {row['detection_count_a']} | {row['detection_count_b']} | "
-            f"{row['max_coordinate_difference']:.12g} | {row['max_score_difference']:.12g} | {row['equivalence']} |"
-        )
+    if audit:
+        for name, row in audit.items():
+            lines.append(
+                f"| {name} | {row['detection_count_a']} | {row['detection_count_b']} | "
+                f"{row['max_coordinate_difference']:.12g} | {row['max_score_difference']:.12g} | {row['equivalence']} |"
+            )
+    else:
+        lines.append("| No selected method pairs are available for equivalence comparison |  |  |  |  | skipped |")
     lines.extend(["", "## Detection counts", ""])
     for method, count in method_counts.items():
         lines.append(f"- `{method}`: {count}")
@@ -211,9 +228,11 @@ def run_clustered_strategy(clusters, strategy):
     return fused
 
 def fuse_all(by_model, args):
+    selected_methods = resolve_methods(args.methods)
+    selected = set(selected_methods)
     image_ids=sorted({i for model in by_model.values() for i in model})
-    outputs={k:{} for k in PAPER_TARGETS}
-    timings={k: 0.0 for k in PAPER_TARGETS}
+    outputs={k:{} for k in selected_methods}
+    timings={k: 0.0 for k in selected_methods}
     total = len(image_ids)
     interval = max(1, args.progress_interval)
     run_start = time.perf_counter()
@@ -241,38 +260,47 @@ def fuse_all(by_model, args):
                 flush=True,
             )
 
-        start = time.perf_counter()
-        if args.disable_preclustering:
-            outputs['WBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
-        else:
-            outputs['WBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
-        timings['WBF'] += time.perf_counter() - start
+        if 'WBF' in selected:
+            start = time.perf_counter()
+            if args.disable_preclustering:
+                outputs['WBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+            else:
+                outputs['WBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
+            timings['WBF'] += time.perf_counter() - start
 
-        start = time.perf_counter()
-        if args.disable_preclustering:
-            outputs['AWBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
-        else:
-            outputs['AWBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
-        timings['AWBF'] += time.perf_counter() - start
+        if 'AWBF' in selected:
+            start = time.perf_counter()
+            if args.disable_preclustering:
+                outputs['AWBF'][image_id]=decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+            else:
+                outputs['AWBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
+            timings['AWBF'] += time.perf_counter() - start
 
-        start = time.perf_counter()
-        if args.disable_preclustering:
-            outputs['Incremental_AWBF'][image_id]=incremental_decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
-        else:
-            outputs['Incremental_AWBF'][image_id]=fuse_incremental_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
-        timings['Incremental_AWBF'] += time.perf_counter() - start
+        if 'Incremental_AWBF' in selected:
+            start = time.perf_counter()
+            if args.disable_preclustering:
+                outputs['Incremental_AWBF'][image_id]=incremental_decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+            else:
+                outputs['Incremental_AWBF'][image_id]=fuse_incremental_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
+            timings['Incremental_AWBF'] += time.perf_counter() - start
 
-        start = time.perf_counter()
-        if args.disable_preclustering:
-            comp_clusters=[awbf_competition(flat,args.iou_threshold,args.cooperation_threshold)]
-        else:
-            comp_clusters=[awbf_competition(c,args.iou_threshold,args.cooperation_threshold) for c in clusters]
-        outputs['AWBF-competition'][image_id]=[d for cluster in comp_clusters for d in cluster]
-        timings['AWBF-competition'] += time.perf_counter() - start
+        comp_clusters = None
+        comp_elapsed = 0.0
+        if 'AWBF-competition' in selected or 'AWBF-competition-IncrementalState' in selected:
+            start = time.perf_counter()
+            if args.disable_preclustering:
+                comp_clusters=[awbf_competition(flat,args.iou_threshold,args.cooperation_threshold)]
+            else:
+                comp_clusters=[awbf_competition(c,args.iou_threshold,args.cooperation_threshold) for c in clusters]
+            comp_elapsed = time.perf_counter() - start
+            if 'AWBF-competition' in selected:
+                outputs['AWBF-competition'][image_id]=[d for cluster in comp_clusters for d in cluster]
+                timings['AWBF-competition'] += comp_elapsed
 
-        start = time.perf_counter()
-        outputs['AWBF-competition-IncrementalState'][image_id]=incremental_awbf([cluster for cluster in comp_clusters if cluster])
-        timings['AWBF-competition-IncrementalState'] += time.perf_counter() - start
+        if 'AWBF-competition-IncrementalState' in selected:
+            start = time.perf_counter()
+            outputs['AWBF-competition-IncrementalState'][image_id]=incremental_awbf([cluster for cluster in comp_clusters if cluster])
+            timings['AWBF-competition-IncrementalState'] += comp_elapsed + (time.perf_counter() - start)
 
         def negotiation_progress(event):
             if args.profile:
@@ -286,39 +314,42 @@ def fuse_all(by_model, args):
                     flush=True,
                 )
 
-        start = time.perf_counter()
-        if args.disable_preclustering:
-            neg_clusters=[awbf_negotiation(
-                flat,
-                args.iou_threshold,
-                args.rounds,
-                args.weight,
-                args.negotiation_threshold,
-                progress_callback=negotiation_progress if args.profile else None,
-            )]
-        else:
-            neg_clusters=[awbf_negotiation(
-                c,
-                args.iou_threshold,
-                args.rounds,
-                args.weight,
-                args.negotiation_threshold,
-                progress_callback=negotiation_progress if args.profile else None,
-            ) for c in clusters]
-        outputs['AWBF-Negotiation'][image_id]=[d for cluster in neg_clusters for d in cluster]
-        timings['AWBF-Negotiation'] += time.perf_counter() - start
+        neg_clusters = None
+        neg_elapsed = 0.0
+        if 'AWBF-Negotiation' in selected or 'AWBF-Negotiation-IncrementalState' in selected:
+            start = time.perf_counter()
+            if args.disable_preclustering:
+                neg_clusters=[awbf_negotiation(
+                    flat,
+                    args.iou_threshold,
+                    args.rounds,
+                    args.weight,
+                    args.negotiation_threshold,
+                    progress_callback=negotiation_progress if args.profile else None,
+                )]
+            else:
+                neg_clusters=[awbf_negotiation(
+                    c,
+                    args.iou_threshold,
+                    args.rounds,
+                    args.weight,
+                    args.negotiation_threshold,
+                    progress_callback=negotiation_progress if args.profile else None,
+                ) for c in clusters]
+            neg_elapsed = time.perf_counter() - start
+            if 'AWBF-Negotiation' in selected:
+                outputs['AWBF-Negotiation'][image_id]=[d for cluster in neg_clusters for d in cluster]
+                timings['AWBF-Negotiation'] += neg_elapsed
 
-        start = time.perf_counter()
-        outputs['AWBF-Negotiation-IncrementalState'][image_id]=incremental_awbf([cluster for cluster in neg_clusters if cluster])
-        timings['AWBF-Negotiation-IncrementalState'] += time.perf_counter() - start
+        if 'AWBF-Negotiation-IncrementalState' in selected:
+            start = time.perf_counter()
+            outputs['AWBF-Negotiation-IncrementalState'][image_id]=incremental_awbf([cluster for cluster in neg_clusters if cluster])
+            timings['AWBF-Negotiation-IncrementalState'] += neg_elapsed + (time.perf_counter() - start)
 
         if args.profile:
             print(
                 f"  timings image {index}/{total}: "
-                f"WBF={format_duration(timings['WBF'])} total, "
-                f"AWBF={format_duration(timings['AWBF'])} total, "
-                f"Competition={format_duration(timings['AWBF-competition'])} total, "
-                f"Negotiation={format_duration(timings['AWBF-Negotiation'])} total",
+                + ", ".join(f"{method}={format_duration(timings[method])} total" for method in selected_methods),
                 flush=True,
             )
     print("Fusion complete", flush=True)
@@ -340,7 +371,8 @@ def main(argv=None):
     ap.add_argument('--progress-interval', type=int, default=100, help='Print fusion progress every N images')
     ap.add_argument('--profile', action='store_true', help='Print detailed per-image/per-strategy timing and AWBF negotiation progress')
     ap.add_argument('--disable-preclustering', action='store_true', help='Disable label/IoU pre-clustering and run previous global per-image fusion behavior')
-    ap.add_argument('--incremental-cluster-state', action='store_true', help='Deprecated compatibility flag; incremental-state competition/negotiation variants are now always emitted as separate output files')
+    ap.add_argument('--incremental-cluster-state', action='store_true', help='Deprecated compatibility flag; incremental-state competition/negotiation variants are selected with --methods')
+    ap.add_argument('--methods', nargs='+', choices=METHOD_CHOICES, default=['all'], help='Fusion methods to run. Use one or more method names, or all. Default: all')
     args=ap.parse_args(argv)
     if args.evaluate_predictions:
         if not args.annotations:
@@ -385,7 +417,7 @@ def main(argv=None):
         by_model=load_predictions(args.predictions_dir)
     os.makedirs(args.output_dir,exist_ok=True)
     image_sizes = load_coco_image_sizes(args.annotations) if args.annotations else None
-    outputs,timings=fuse_all(by_model,args); method_audit=build_method_equivalence_audit(outputs); method_counts=count_method_detections(outputs); report={'paper_targets':PAPER_TARGETS,'metrics':{},'bbox_scale_mode':args.bbox_scale,'bbox_reports':{},'timings_seconds':timings,'method_detection_counts':method_counts,'method_equivalence_audit':method_audit,'notes':[]}
+    selected_methods=resolve_methods(args.methods); outputs,timings=fuse_all(by_model,args); method_audit=build_method_equivalence_audit(outputs); method_counts=count_method_detections(outputs); report={'paper_targets':PAPER_TARGETS,'selected_methods':selected_methods,'metrics':{},'bbox_scale_mode':args.bbox_scale,'bbox_reports':{},'timings_seconds':timings,'method_detection_counts':method_counts,'method_equivalence_audit':method_audit,'notes':[]}
     for method,dets in outputs.items():
         pred_path=os.path.join(args.output_dir,OUTPUT_FILENAMES[method])
         total_detections = sum(len(v) for v in dets.values())

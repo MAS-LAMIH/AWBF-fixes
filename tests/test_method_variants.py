@@ -18,6 +18,7 @@ def _args(**overrides):
         rounds=5,
         weight=0.3,
         incremental_cluster_state=False,
+        methods=["all"],
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
