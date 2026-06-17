@@ -159,17 +159,28 @@ writes `outputs/eval_wbf/evaluation_report.json`.
 
 ### Incremental AWBF experiment
 
-`Incremental_AWBF` is exported alongside the other fusion strategies. It fuses
-each pre-cluster with running score/weight bookkeeping instead of a final
-one-shot reduction. To also reduce post-competition/post-negotiation cluster
-state incrementally, add `--incremental-cluster-state`:
+`Incremental_AWBF` is exported alongside the paper-style fusion strategies. It
+fuses each pre-cluster with running score/weight bookkeeping instead of a final
+one-shot reduction. With fixed cluster membership this is an agent-style
+execution variant of AWBF, not necessarily a distinct paper metric unless you
+explicitly report it as such.
+
+Competition and negotiation incremental-state variants are always written
+separately so they cannot overwrite the paper-style outputs:
+
+- `awbf_competition_predictions.json`
+- `awbf_competition_incremental_state_predictions.json`
+- `awbf_negotiation_predictions.json`
+- `awbf_negotiation_incremental_state_predictions.json`
+- `incremental_awbf_predictions.json`
 
 ```bash
 python scripts/reproduce_paper_results.py \
   --benchmark-dir data/benchmark \
   --output-dir outputs/reproduction_benchmark \
-  --profile \
-  --incremental-cluster-state
+  --profile
 ```
 
-This writes `outputs/reproduction_benchmark/incremental_awbf_predictions.json`.
+The run also writes `outputs/reproduction_benchmark/METHOD_EQUIVALENCE_AUDIT.md`
+and includes the same comparison data under `method_equivalence_audit` in
+`reproduction_report.json`.
