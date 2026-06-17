@@ -103,6 +103,43 @@ def incremental_fuse_detections(detections: Sequence[Detection], source: str = "
 def incremental_awbf(clusters: Sequence[Sequence[Detection]]) -> List[Detection]:
     return [incremental_fuse_detections(cluster) for cluster in clusters if cluster]
 
+
+def incremental_decentralized_wbf(
+    detections_by_model: Mapping[str, Sequence[Detection]],
+    iou_thr: float = 0.55,
+    skip_box_thr: float = 0.0,
+) -> List[Detection]:
+    """Run WBF cluster assignment with incremental per-cluster state updates.
+
+    This preserves the same candidate ordering and representative-based cluster
+    membership used by :func:`decentralized_wbf`, but updates each cluster
+    representative as detections arrive instead of recomputing the final
+    confidence-weighted box in one shot. With fixed membership, the resulting
+    coordinates and scores are mathematically equivalent to WBF up to floating
+    point roundoff.
+    """
+    candidates = [d for detections in detections_by_model.values() for d in detections if d.score >= skip_box_thr]
+    candidates.sort(key=lambda d: d.score, reverse=True)
+    states: List[IncrementalFusionState] = []
+    for det in candidates:
+        best_idx = None
+        best_iou = iou_thr
+        for idx, state in enumerate(states):
+            fused = state.to_detection()
+            if det.label == fused.label:
+                overlap = iou(det.box, fused.box)
+                if overlap > best_iou:
+                    best_iou = overlap
+                    best_idx = idx
+        if best_idx is None:
+            state = IncrementalFusionState(label=det.label, source="incremental_awbf")
+            state.add(det)
+            states.append(state)
+        else:
+            states[best_idx].add(det)
+    fused = [state.to_detection() for state in states]
+    return sorted(fused, key=lambda d: d.score, reverse=True)
+
 def cluster_detections_by_label_and_iou(
     detections: Sequence[Detection],
     iou_thr: float = 0.55,

@@ -37,6 +37,20 @@ def test_incremental_awbf_matches_awbf_when_cluster_membership_is_fixed():
     assert row["equivalence"] in {"identical", "nearly identical"}
 
 
+
+def test_incremental_awbf_matches_awbf_for_chained_precluster_that_wbf_splits():
+    by_model = {
+        "a": {1: [Detection((0.0, 0.0, 1.0, 1.0), 0.9, 1, "a")]},
+        "b": {1: [Detection((0.2, 0.0, 1.2, 1.0), 0.8, 1, "b")]},
+        "c": {1: [Detection((0.45, 0.0, 1.45, 1.0), 0.7, 1, "c")]},
+    }
+    outputs, _timings = fuse_all(by_model, _args())
+    audit = build_method_equivalence_audit(outputs)
+    row = audit["AWBF vs Incremental_AWBF"]
+    assert row["detection_count_a"] == row["detection_count_b"] == 2
+    assert row["max_coordinate_difference"] == pytest.approx(0.0)
+    assert row["max_score_difference"] == pytest.approx(0.0)
+
 def test_incremental_state_variants_may_change_detection_count_without_overwriting_paper_outputs():
     by_model = {
         "a": {1: [Detection((0.0, 0.0, 1.0, 1.0), 0.9, 1, "a")]},

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, cluster_detections_by_label_and_iou, cluster_stats, convert_coco_detection_bboxes, decentralized_wbf, incremental_awbf, evaluate_coco, export_coco_detections, load_coco_image_sizes
+from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, cluster_detections_by_label_and_iou, cluster_stats, convert_coco_detection_bboxes, decentralized_wbf, incremental_awbf, incremental_decentralized_wbf, evaluate_coco, export_coco_detections, load_coco_image_sizes
 from scripts.download_benchmark import EXPECTED_FILES, ensure_benchmark, find_expected_file, validate_benchmark_files
 
 PAPER_TARGETS={
@@ -198,6 +198,12 @@ def fuse_wbf_clusters(clusters, iou_threshold, score_threshold):
         fused.extend(decentralized_wbf(detections_by_source(cluster), iou_threshold, score_threshold))
     return fused
 
+def fuse_incremental_wbf_clusters(clusters, iou_threshold, score_threshold):
+    fused = []
+    for cluster in clusters:
+        fused.extend(incremental_decentralized_wbf(detections_by_source(cluster), iou_threshold, score_threshold))
+    return fused
+
 def run_clustered_strategy(clusters, strategy):
     fused = []
     for cluster in clusters:
@@ -250,7 +256,10 @@ def fuse_all(by_model, args):
         timings['AWBF'] += time.perf_counter() - start
 
         start = time.perf_counter()
-        outputs['Incremental_AWBF'][image_id]=incremental_awbf(clusters)
+        if args.disable_preclustering:
+            outputs['Incremental_AWBF'][image_id]=incremental_decentralized_wbf(per_model,args.iou_threshold,args.score_threshold)
+        else:
+            outputs['Incremental_AWBF'][image_id]=fuse_incremental_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
         timings['Incremental_AWBF'] += time.perf_counter() - start
 
         start = time.perf_counter()

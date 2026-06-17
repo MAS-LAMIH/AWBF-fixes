@@ -160,10 +160,11 @@ writes `outputs/eval_wbf/evaluation_report.json`.
 ### Incremental AWBF experiment
 
 `Incremental_AWBF` is exported alongside the paper-style fusion strategies. It
-fuses each pre-cluster with running score/weight bookkeeping instead of a final
-one-shot reduction. With fixed cluster membership this is an agent-style
-execution variant of AWBF, not necessarily a distinct paper metric unless you
-explicitly report it as such.
+uses the same WBF cluster-assignment logic as AWBF, but keeps each cluster
+representative as running score/weight state instead of recomputing the final
+confidence-weighted box in one shot. With fixed membership this is an
+agent-style execution variant of AWBF, not necessarily a distinct paper metric
+unless you explicitly report it as such.
 
 Competition and negotiation incremental-state variants are always written
 separately so they cannot overwrite the paper-style outputs:
