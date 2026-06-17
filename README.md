@@ -156,3 +156,20 @@ annotations file. Direct evaluation mode requires `--annotations`, prints metric
 for each input file, saves converted files like
 `outputs/eval_wbf/wbf_predictions_pixel_xywh.json` when conversion is needed, and
 writes `outputs/eval_wbf/evaluation_report.json`.
+
+### Incremental AWBF experiment
+
+`Incremental_AWBF` is exported alongside the other fusion strategies. It fuses
+each pre-cluster with running score/weight bookkeeping instead of a final
+one-shot reduction. To also reduce post-competition/post-negotiation cluster
+state incrementally, add `--incremental-cluster-state`:
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-dir data/benchmark \
+  --output-dir outputs/reproduction_benchmark \
+  --profile \
+  --incremental-cluster-state
+```
+
+This writes `outputs/reproduction_benchmark/incremental_awbf_predictions.json`.

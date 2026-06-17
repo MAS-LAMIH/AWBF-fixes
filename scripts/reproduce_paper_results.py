@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, cluster_detections_by_label_and_iou, cluster_stats, convert_coco_detection_bboxes, decentralized_wbf, evaluate_coco, export_coco_detections, load_coco_image_sizes
+from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, cluster_detections_by_label_and_iou, cluster_stats, convert_coco_detection_bboxes, decentralized_wbf, incremental_awbf, evaluate_coco, export_coco_detections, load_coco_image_sizes
 from scripts.download_benchmark import EXPECTED_FILES, ensure_benchmark, find_expected_file, validate_benchmark_files
 
 PAPER_TARGETS={
@@ -24,6 +24,7 @@ PAPER_TARGETS={
  'AWBF': {'AP':0.610,'AP50':0.660,'AP75':0.625},
  'AWBF-competition': {'AP':0.651,'AP50':0.666,'AP75':0.590},
  'AWBF-Negotiation': {'AP':0.626,'AP50':0.684,'AP75':0.640},
+ 'Incremental_AWBF': {'AP': None, 'AP50': None, 'AP75': None},
 }
 
 OUTPUT_FILENAMES = {
@@ -31,6 +32,7 @@ OUTPUT_FILENAMES = {
     'AWBF': 'awbf_predictions.json',
     'AWBF-competition': 'awbf_competition_predictions.json',
     'AWBF-Negotiation': 'awbf_negotiation_predictions.json',
+    'Incremental_AWBF': 'incremental_awbf_predictions.json',
 }
 
 def format_duration(seconds):
@@ -161,10 +163,18 @@ def fuse_all(by_model, args):
         timings['AWBF'] += time.perf_counter() - start
 
         start = time.perf_counter()
+        outputs['Incremental_AWBF'][image_id]=incremental_awbf(clusters)
+        timings['Incremental_AWBF'] += time.perf_counter() - start
+
+        start = time.perf_counter()
         if args.disable_preclustering:
-            outputs['AWBF-competition'][image_id]=awbf_competition(flat,args.iou_threshold,args.cooperation_threshold)
+            comp_outputs=awbf_competition(flat,args.iou_threshold,args.cooperation_threshold)
+            outputs['AWBF-competition'][image_id]=incremental_awbf([comp_outputs]) if args.incremental_cluster_state and comp_outputs else comp_outputs
         else:
-            outputs['AWBF-competition'][image_id]=run_clustered_strategy(clusters, lambda c: awbf_competition(c,args.iou_threshold,args.cooperation_threshold))
+            if args.incremental_cluster_state:
+                outputs['AWBF-competition'][image_id]=run_clustered_strategy(clusters, lambda c: incremental_awbf([awbf_competition(c,args.iou_threshold,args.cooperation_threshold)]))
+            else:
+                outputs['AWBF-competition'][image_id]=run_clustered_strategy(clusters, lambda c: awbf_competition(c,args.iou_threshold,args.cooperation_threshold))
         timings['AWBF-competition'] += time.perf_counter() - start
 
         def negotiation_progress(event):
@@ -181,7 +191,7 @@ def fuse_all(by_model, args):
 
         start = time.perf_counter()
         if args.disable_preclustering:
-            outputs['AWBF-Negotiation'][image_id]=awbf_negotiation(
+            neg_outputs=awbf_negotiation(
                 flat,
                 args.iou_threshold,
                 args.rounds,
@@ -189,18 +199,32 @@ def fuse_all(by_model, args):
                 args.negotiation_threshold,
                 progress_callback=negotiation_progress if args.profile else None,
             )
+            outputs['AWBF-Negotiation'][image_id]=incremental_awbf([neg_outputs]) if args.incremental_cluster_state and neg_outputs else neg_outputs
         else:
-            outputs['AWBF-Negotiation'][image_id]=run_clustered_strategy(
-                clusters,
-                lambda c: awbf_negotiation(
-                    c,
-                    args.iou_threshold,
-                    args.rounds,
-                    args.weight,
-                    args.negotiation_threshold,
-                    progress_callback=negotiation_progress if args.profile else None,
-                ),
-            )
+            if args.incremental_cluster_state:
+                outputs['AWBF-Negotiation'][image_id]=run_clustered_strategy(
+                    clusters,
+                    lambda c: incremental_awbf([awbf_negotiation(
+                        c,
+                        args.iou_threshold,
+                        args.rounds,
+                        args.weight,
+                        args.negotiation_threshold,
+                        progress_callback=negotiation_progress if args.profile else None,
+                    )]),
+                )
+            else:
+                outputs['AWBF-Negotiation'][image_id]=run_clustered_strategy(
+                    clusters,
+                    lambda c: awbf_negotiation(
+                        c,
+                        args.iou_threshold,
+                        args.rounds,
+                        args.weight,
+                        args.negotiation_threshold,
+                        progress_callback=negotiation_progress if args.profile else None,
+                    ),
+                )
         timings['AWBF-Negotiation'] += time.perf_counter() - start
 
         if args.profile:
@@ -231,6 +255,7 @@ def main(argv=None):
     ap.add_argument('--progress-interval', type=int, default=100, help='Print fusion progress every N images')
     ap.add_argument('--profile', action='store_true', help='Print detailed per-image/per-strategy timing and AWBF negotiation progress')
     ap.add_argument('--disable-preclustering', action='store_true', help='Disable label/IoU pre-clustering and run previous global per-image fusion behavior')
+    ap.add_argument('--incremental-cluster-state', action='store_true', help='After competition/negotiation, incrementally fuse each cluster state instead of returning all remaining cluster detections')
     args=ap.parse_args(argv)
     if args.evaluate_predictions:
         if not args.annotations:

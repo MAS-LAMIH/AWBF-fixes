@@ -194,3 +194,52 @@ stuck**. The first image can be expensive enough to appear frozen because
 AWBF-Negotiation performs repeated pure-Python pairwise IoU scans. Use
 `--profile` to confirm time and comparison counts before implementing the
 optimizations above.
+
+## Incremental_AWBF experiment path
+
+`Incremental_AWBF` has been added as a separate fusion strategy. It uses the same
+pre-clusters as the other methods, but each cluster is reduced by maintaining an
+incremental weighted state instead of recomputing the final weighted average from
+scratch at the end.
+
+For fixed cluster membership and the same score weights, incremental fusion has
+the same mathematical coordinate result as one-shot weighted fusion, up to normal
+floating-point ordering differences:
+
+```text
+one-shot:     sum(score_i * box_i) / sum(score_i)
+incremental:  running_update(previous_fused_box, previous_total_weight, next_box)
+```
+
+The implementation keeps explicit bookkeeping for:
+
+- accumulated coordinate weight (`total_weight`)
+- score sum (`score_sum`)
+- member count (`count`)
+
+This preserves the current score semantics (`score_sum / count`) while reducing
+representative recomputation for the incremental method.
+
+### Competition/negotiation incremental cluster-state option
+
+The CLI also supports `--incremental-cluster-state`. When enabled, competition
+and negotiation still run inside each cluster, but each cluster's remaining
+post-interaction detections are reduced through the incremental fusion state
+before export. This allows comparing the current behavior against a mutating
+cluster-state interpretation.
+
+### Experiment command
+
+```bash
+python scripts/reproduce_paper_results.py \
+  --benchmark-dir data/benchmark \
+  --output-dir outputs/reproduction_benchmark \
+  --profile \
+  --incremental-cluster-state
+```
+
+The report includes `Incremental_AWBF` under `timings_seconds` and exports:
+
+```text
+outputs/reproduction_benchmark/incremental_awbf_predictions.json
+```

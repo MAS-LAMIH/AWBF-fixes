@@ -47,6 +47,62 @@ def iob(subject_box: Sequence[float], reference_box: Sequence[float]) -> float:
     return 0.0 if denom <= 0.0 else intersection_area(subject_box, reference_box) / denom
 
 
+@dataclass
+class IncrementalFusionState:
+    label: int
+    source: str = "incremental_awbf"
+    total_weight: float = 0.0
+    score_sum: float = 0.0
+    count: int = 0
+    fused_box: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    reliability: float = 1.0
+
+    def add(self, detection: Detection) -> None:
+        weight = max(0.0, detection.score)
+        if self.count == 0:
+            self.label = detection.label
+            self.fused_box = tuple(float(v) for v in detection.box)
+            self.total_weight = weight
+        elif self.total_weight + weight == 0.0:
+            self.fused_box = tuple(
+                (self.fused_box[i] * self.count + detection.box[i]) / (self.count + 1)
+                for i in range(4)
+            )
+        else:
+            new_total = self.total_weight + weight
+            self.fused_box = tuple(
+                (self.fused_box[i] * self.total_weight + detection.box[i] * weight) / new_total
+                for i in range(4)
+            )
+            self.total_weight = new_total
+        self.score_sum += detection.score
+        self.count += 1
+        self.reliability = max(self.reliability, detection.reliability)
+
+    def to_detection(self) -> Detection:
+        if self.count == 0:
+            raise ValueError("Cannot create detection from empty incremental fusion state")
+        return Detection(
+            tuple(float(v) for v in self.fused_box),
+            self.score_sum / self.count,
+            self.label,
+            self.source,
+            self.reliability,
+        )
+
+
+def incremental_fuse_detections(detections: Sequence[Detection], source: str = "incremental_awbf") -> Detection:
+    if not detections:
+        raise ValueError("detections must not be empty")
+    state = IncrementalFusionState(label=detections[0].label, source=source)
+    for detection in detections:
+        state.add(detection)
+    return state.to_detection()
+
+
+def incremental_awbf(clusters: Sequence[Sequence[Detection]]) -> List[Detection]:
+    return [incremental_fuse_detections(cluster) for cluster in clusters if cluster]
+
 def cluster_detections_by_label_and_iou(
     detections: Sequence[Detection],
     iou_thr: float = 0.55,
