@@ -1,80 +1,70 @@
 # Paper Argument Support
 
-This file classifies the paper claims from the prompt against the current code.
-Because the full benchmark run could not complete in this environment, verdicts
-that depend on reproduced metrics are conservative.
+This document classifies the paper claims from the prompt against the current
+source code. It is intentionally conservative: this audit did **not** run the
+full benchmark, COCO evaluation, or parameter sweep.
 
-| # | Paper claim | Paper metric evidence | Current-code evidence | Verdict | Can revised paper keep it? | Suggested wording |
+## Verdict labels
+
+- **SUPPORTED BY CODE MECHANISM**: the implemented algorithm directly contains a
+  mechanism that supports the claim qualitatively.
+- **PLAUSIBLE BUT NEEDS EMPIRICAL CONFIRMATION**: the mechanism could produce the
+  claim, but the claim depends on dataset metrics or parameter settings.
+- **NOT SUPPORTED BY CURRENT CODE**: the current implementation does not contain
+  the mechanism needed for the claim, or implements behavior that contradicts it.
+- **CANNOT DETERMINE WITHOUT DATASET RUN**: the claim is primarily numeric and
+  requires full benchmark/COCO evaluation or a parameter sweep.
+
+## Claim-by-claim support table
+
+| # | Paper claim | Paper metric evidence from prompt | Current-code evidence | Verdict | Can the revised paper keep it? | Suggested revised wording |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | WBF is strongest overall baseline. | WBF has highest AP/AP50/AP75 and strong AR in the paper table. | WBF is implemented as confidence-weighted cluster fusion; full metrics not computed here. | CANNOT DETERMINE FROM CURRENT RUN | Yes, if reproduced metrics confirm. | "On the reported benchmark, WBF remains the strongest centralized baseline." |
-| 2 | AWBF is comparable but not better than WBF and mainly decentralizes WBF. | Paper AWBF has lower AP than WBF but some useful metric preservation. | Current AWBF uses the same fusion path as WBF, so equivalence is expected. | PARTIALLY SUPPORTED | Yes, but emphasize formulation not improvement. | "Current implementation treats AWBF as an agent-style execution of WBF; it should match WBF unless additional agent behavior is introduced." |
-| 3 | AWBF improves/preserves AP small, AP medium, AR50 vs WBF. | Paper table gives AP small/medium and AR50 improvements. | Current code likely makes AWBF identical to WBF, so it cannot explain improvements over WBF. | NOT SUPPORTED BY CURRENT CODE | Only if metrics from a different AWBF implementation support it. | "The reported AWBF gains are empirical for the paper setup; this code's AWBF is equivalent to WBF." |
-| 4 | Competition can improve precision as competitiveness increases. | Paper interpretation links suppression to precision. | Competition code removes a loser when attack-defense margin exceeds threshold. | PARTIALLY SUPPORTED | Yes as a mechanistic hypothesis, not guaranteed metric result. | "Competition is designed to be precision-oriented by suppressing weaker overlaps; the AP effect is parameter/data dependent." |
-| 5 | Competition can harm small-object performance. | Paper AP small drops strongly for competition. | Suppression of weak overlaps can remove valid small objects; small IoU is sensitive to coordinate noise. | PARTIALLY SUPPORTED | Yes with caveat. | "Competition may harm small objects because suppression errors are costlier at small scale." |
-| 6 | Negotiation restores adaptability vs competition. | Paper negotiation improves AP small/medium/large and AR metrics vs competition. | Negotiation moves/fuses instead of immediately deleting every weak box. | PARTIALLY SUPPORTED | Yes if reproduced metrics confirm. | "Negotiation is intended to reduce premature suppression; measured gains should be reported from validation runs." |
-| 7 | Negotiation avoids premature suppression. | Paper interpretation. | Code performs iterative proposal adjustment/fusion before final output. | SUPPORTED MECHANISTICALLY | Yes. | "Negotiation delays hard suppression by allowing multi-round adjustment and fusion." |
-| 8 | Negotiation benefits small/medium precision, AR50, large AR. | Paper table. | Mechanism is plausible; current full metrics unavailable. | CANNOT DETERMINE FROM CURRENT RUN | Only with computed metrics. | "In the reported table, negotiation improves these metrics over competition; reproduce with validation before generalizing." |
-| 9 | Parameter trends for T, W, Rmax. | Paper summary describes empirical ranges. | Parameter sweep script is provided to test T/W/Rmax; results not computed here. | CANNOT DETERMINE FROM CURRENT RUN | Keep as empirical if sweep supports. | "Parameter effects are empirical and should be shown with sweep plots/tables." |
+| 1 | WBF is the strongest overall baseline. | WBF has the highest reported AP, AP50, AP75, and strong scale AR metrics. | WBF uses confidence-weighted consensus fusion, which can reduce duplicates and improve localization. | PLAUSIBLE BUT NEEDS EMPIRICAL CONFIRMATION | Yes, as a reported empirical result; not as a claim reproduced here unless a validated run confirms it. | "On the reported COCO subset, WBF remains the strongest centralized baseline; this is consistent with confidence-weighted consensus fusion." |
+| 2 | AWBF is comparable to WBF and mainly decentralizes WBF. | Paper AWBF is lower overall than WBF but remains competitive. | Current AWBF uses the same fusion path as WBF, so equivalence/comparability is expected. | SUPPORTED BY CODE MECHANISM | Yes, if framed as an execution/formulation claim. | "AWBF can be interpreted as an agent-style execution of WBF; when agents select the same clusters and weights, it should reproduce WBF behavior." |
+| 3 | AWBF improves AP small, AP medium, or AR50 over WBF while lowering overall AP. | Prompt reports AWBF APs/APm/AR50 higher than WBF while overall AP is lower. | Current AWBF is behaviorally identical to WBF, so it does not explain improvements over WBF. | NOT SUPPORTED BY CURRENT CODE | Only if supported by a different/non-equivalent AWBF implementation or full empirical results. | "The reported AWBF scale-specific gains should be treated as empirical for the paper setup; the current code's AWBF path is WBF-equivalent." |
+| 4 | Competition improves precision as competitiveness increases. | Paper interpretation says suppression removes weaker boxes and can increase AP. | Competition computes attack/defense margins and removes a loser when the threshold condition is met. | PLAUSIBLE BUT NEEDS EMPIRICAL CONFIRMATION | Yes as a mechanism-backed hypothesis; AP improvement must be measured. | "Competition is designed to be precision-oriented by suppressing weaker overlaps; the measured AP effect is parameter- and data-dependent." |
+| 5 | Competition can harm small-object performance. | Prompt reports a large AP-small drop for competition. | Hard suppression can remove weak true positives; small-object IoU is highly sensitive to small coordinate errors. | SUPPORTED BY CODE MECHANISM | Yes, with empirical results cited separately. | "The competition rule can disproportionately harm small objects because erroneous suppression and small coordinate shifts have larger IoU consequences." |
+| 6 | Competition preserves recall relatively well because enough accurate boxes survive. | Prompt reports competition AR lower than WBF/AWBF-Negotiation but AR50/AR75 remain nonzero/competitive. | Code can preserve winners and fuse close-margin pairs, but can also delete boxes. | PLAUSIBLE BUT NEEDS EMPIRICAL CONFIRMATION | Only with measured AR trends. | "Recall may remain stable when surviving boxes are accurate, but this must be verified for each threshold and dataset." |
+| 7 | Negotiation restores adaptability compared with pure competition. | Prompt reports negotiation improves APs/APm/APl and AR metrics over competition. | Negotiation adjusts or fuses boxes instead of immediately applying hard suppression. | SUPPORTED BY CODE MECHANISM | Yes as a mechanism claim; metric magnitude requires validation. | "Negotiation reduces premature suppression by allowing iterative adjustment and fusion before final output." |
+| 8 | Negotiation is especially beneficial for small/medium precision, AR50, and large-object AR. | Prompt reports improvements in those metrics over competition. | The mechanism can preserve/refine boxes, but exact scale-specific gains depend on data and parameters. | PLAUSIBLE BUT NEEDS EMPIRICAL CONFIRMATION | Yes if backed by actual evaluation tables. | "The observed metrics are consistent with negotiation preserving useful proposals; the scale-specific trend should be validated empirically." |
+| 9 | Useful W range is around 0.15-0.4. | Paper summary reports this range. | The update rule makes moderate movement plausible, but no source-only proof identifies this optimum. | CANNOT DETERMINE WITHOUT DATASET RUN | Keep only as empirical. | "In the reported sweep, moderate W values performed best; this trend requires empirical validation for new detector sets." |
+| 10 | Rmax = 5 gives useful adaptation and Rmax = 10 adds limited gain. | Paper summary reports diminishing returns. | The iterative pair update can converge or stop improving after few rounds, but the exact round count is empirical. | PLAUSIBLE BUT NEEDS EMPIRICAL CONFIRMATION | Yes with sweep evidence. | "Additional rounds may have diminishing returns once pair proposals converge; the practical cutoff should be shown by a sweep." |
+| 11 | W around 0.7 may lead to metric convergence. | Paper summary treats this as an empirical observation. | High W can pull boxes strongly toward consensus, but no deterministic guarantee exists. | CANNOT DETERMINE WITHOUT DATASET RUN | Only as cautious empirical observation. | "Metric convergence near W≈0.7, if observed, should be presented as empirical rather than guaranteed by the algorithm." |
+| 12 | Current code reproduces the paper metrics. | Paper table provides targets. | This audit did not run full evaluation; known repository reports are conservative about missing data/annotations. | CANNOT DETERMINE WITHOUT DATASET RUN | No, not from this audit. | "The implementation provides the machinery for reproduction; exact reproduction requires the benchmark CSVs, COCO annotations, and validated evaluation outputs." |
 
-## Algorithmic explanations for reported trends
+## Interpretation of the revised paper argument
 
-### A. Why WBF can have highest overall AP
+The revised paper can safely keep mechanism-based claims that are directly
+implemented: WBF performs confidence-weighted consensus fusion; competition uses
+confidence/IoB attack-defense suppression; negotiation uses multi-round proposal
+adjustment and fusion. These mechanisms justify cautious language such as
+"the mechanism suggests" or "the observed metrics are consistent with."
 
-WBF aggregates multiple detector boxes into confidence-weighted representatives,
-which can reduce duplicate false positives and improve localization when detectors
-agree. This can raise AP and high-IoU AP because the fused box is often closer to
-consensus than a single detector output.
+The revised paper should be more careful with claims that depend on numeric
+trends. In particular, AWBF-vs-WBF differences are **not supported by the current
+code path**, because the current AWBF method is routed through the same fusion
+implementation as WBF. If the paper wants AWBF to have distinct AP/AR behavior,
+it must document the non-equivalent agent behavior that produces different
+cluster membership, ordering, filtering, or score updates.
 
-### B. Why AWBF can be comparable but lower than WBF
+## Recommended cautious wording
 
-A decentralized/agentified implementation can reproduce WBF if agents select the
-same clusters and weights. If agent ordering, candidate visibility, or thresholds
-differ, the result can become comparable but lower. The current code does not add
-such behavior, so it should be equivalent to WBF.
+- "The mechanism suggests that competition can improve precision by suppressing
+  weaker overlapping detections, but the AP/AR tradeoff is threshold-dependent."
+- "The observed negotiation metrics are consistent with avoiding premature
+  suppression through iterative proposal adjustment."
+- "AWBF is best described as a decentralized execution of WBF when it uses the
+  same candidate selection and confidence-weighted fusion rule."
+- "Scale-specific gains such as AP small, AP medium, and AR50 require empirical
+  validation and should not be inferred from the current WBF-equivalent AWBF code
+  path alone."
+- "The W and Rmax trends should be reported as parameter-sweep findings rather
+  than deterministic properties of the algorithm."
 
-### C. Why AWBF may improve AP small/medium or AR50 while lowering AP
+## Metric terminology note
 
-This is plausible only if AWBF preserves some detections or clusters differently
-from centralized WBF. Preserving extra small/medium detections can improve some
-scale-specific or low-IoU recall metrics while adding false positives or worse
-localization that lowers overall AP. The current code's AWBF path does not create
-this distinction from WBF.
-
-### D. Why competition can increase precision but harm recall/small objects
-
-Competition removes a box when attack-defense margin exceeds threshold. Removing
-weak overlapping boxes can reduce false positives and improve precision/AP, but
-it can also remove true positives. Small objects are especially vulnerable because
-minor coordinate changes cause large IoU changes.
-
-### E. Why negotiation can restore metrics compared with competition
-
-Negotiation updates boxes toward competing proposals and can fuse when utilities
-are close. This avoids immediate deletion and can refine positions, which may
-recover small/medium/large AP and AR compared with pure suppression.
-
-### F. Why Rmax > 5 can show diminishing returns
-
-If boxes converge within a few proposal updates, extra rounds repeatedly compare
-similar boxes and add little new information. Additional rounds can increase cost
-without changing cluster membership or coordinates much.
-
-### G. Why moderate W may be better than W=0 or W close to 1
-
-`W=0` means boxes do not move, making negotiation close to a static auction.
-Moderate `W` allows gradual correction. `W` close to 1 can over-move boxes toward
-a competitor, potentially hurting localization or causing unstable convergence.
-
-### H. Whether W≈0.7 metric convergence is explainable
-
-It is plausible as an empirical balance point where boxes move strongly enough to
-reach consensus but not enough to destroy localization. However, this is not a
-mechanistic guarantee. It must be validated with parameter sweep results.
-
-## Current overall conclusion
-
-The code can justify some **mechanistic explanations** in the paper, especially
-for competition and negotiation. It cannot currently justify paper numeric trends
-without a successful validated benchmark run. Claims that AWBF differs
-behaviorally from WBF should be revised unless additional non-equivalent AWBF
-agent behavior is implemented and validated.
+The implementation distinguishes standard COCO recall statistics from custom
+AR-at-IoU metrics. Standard `stats[7]` and `stats[8]` are not AR50/AR75; the code
+reports them as `AR_maxDets10` and `AR`/`AR_maxDets100` and computes custom
+`AR50`/`AR75` from the recall tensor. Therefore, any paper comparison involving
+AR50 or AR75 must use those custom fields from a validated COCO evaluation run.
