@@ -8,7 +8,7 @@ exports WBF, AWBF, AWBF-competition, and AWBF-Negotiation results, then evaluate
 with pycocotools when annotations are supplied.
 """
 from __future__ import annotations
-import argparse, csv, json, os, sys, time
+import argparse, csv, json, math, os, sys, time
 from collections import defaultdict
 from pathlib import Path
 
@@ -200,6 +200,253 @@ def load_benchmark_predictions(benchmark_dir):
     print(f"Loaded {len(by_model)} benchmark CSV files", flush=True)
     return by_model
 
+
+def load_coco_metadata(annotations_json):
+    if not annotations_json:
+        return None
+    with open(annotations_json, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    images = {int(img["id"]): {"width": float(img["width"]), "height": float(img["height"])} for img in data.get("images", [])}
+    categories = {int(cat["id"]) for cat in data.get("categories", [])}
+    return {"images": images, "categories": categories, "annotations": annotations_json}
+
+def validate_coco_detection_rows(rows, coco_meta=None):
+    images = (coco_meta or {}).get("images", {})
+    categories = (coco_meta or {}).get("categories", set())
+    stats = {
+        "total_rows": len(rows),
+        "valid_rows": 0,
+        "invalid_rows": 0,
+        "missing_image_ids": [],
+        "invalid_category_ids": [],
+        "invalid_scores": 0,
+        "invalid_bboxes": 0,
+        "non_pixel_or_tiny_bboxes": 0,
+        "normalized_looking_bboxes": 0,
+        "clipped_or_out_of_bounds_bboxes": 0,
+        "empty_or_nonpositive_bboxes_removed": 0,
+    }
+    missing_images = set()
+    invalid_categories = set()
+    valid_rows = []
+    for row in rows:
+        valid = True
+        image_id = int(row.get("image_id"))
+        category_id = int(row.get("category_id"))
+        score = float(row.get("score", -1.0))
+        bbox = [float(v) for v in row.get("bbox", [])]
+        if images and image_id not in images:
+            missing_images.add(image_id)
+            valid = False
+        if categories and category_id not in categories:
+            invalid_categories.add(category_id)
+            valid = False
+        if not (0.0 <= score <= 1.0) or not math.isfinite(score):
+            stats["invalid_scores"] += 1
+            valid = False
+        if len(bbox) != 4 or not all(math.isfinite(v) for v in bbox):
+            stats["invalid_bboxes"] += 1
+            valid = False
+        else:
+            x, y, w, h = bbox
+            if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and 0.0 <= w <= 1.0 and 0.0 <= h <= 1.0:
+                stats["normalized_looking_bboxes"] += 1
+            if w <= 0.0 or h <= 0.0:
+                stats["invalid_bboxes"] += 1
+                stats["empty_or_nonpositive_bboxes_removed"] += 1
+                valid = False
+            elif w <= 1.0 or h <= 1.0:
+                stats["non_pixel_or_tiny_bboxes"] += 1
+            if images and image_id in images:
+                width = images[image_id]["width"]
+                height = images[image_id]["height"]
+                if x < 0.0 or y < 0.0 or x + w > width + 1e-6 or y + h > height + 1e-6:
+                    stats["clipped_or_out_of_bounds_bboxes"] += 1
+        if valid:
+            valid_rows.append(row)
+    stats["missing_image_ids"] = sorted(missing_images)
+    stats["invalid_category_ids"] = sorted(invalid_categories)
+    stats["valid_rows"] = len(valid_rows)
+    stats["invalid_rows"] = len(rows) - len(valid_rows)
+    return valid_rows, stats
+
+def initialize_flow_stats(methods):
+    return {
+        method: {
+            "images": 0,
+            "input_detections": 0,
+            "output_detections": 0,
+            "score_sum": 0.0,
+            "clusters": 0,
+            "clustered_detections": 0,
+            "largest_cluster_size": 0,
+        }
+        for method in methods
+    }
+
+def update_flow_stats(flow_stats, method, input_count, output_detections, stats):
+    row = flow_stats[method]
+    output_count = len(output_detections)
+    row["images"] += 1
+    row["input_detections"] += input_count
+    row["output_detections"] += output_count
+    row["score_sum"] += sum(d.score for d in output_detections)
+    row["clusters"] += int(stats["clusters"])
+    row["clustered_detections"] += input_count
+    row["largest_cluster_size"] = max(row["largest_cluster_size"], int(stats["largest_cluster_size"]))
+
+def finalize_flow_stats(flow_stats):
+    finalized = {}
+    for method, row in flow_stats.items():
+        images = row["images"] or 1
+        clusters = row["clusters"] or 1
+        output = row["output_detections"]
+        input_count = row["input_detections"]
+        finalized[method] = {
+            "input_detections": input_count,
+            "output_detections": output,
+            "detections_per_image": output / images,
+            "average_confidence": (row["score_sum"] / output) if output else 0.0,
+            "number_of_clusters": row["clusters"],
+            "average_cluster_size": row["clustered_detections"] / clusters,
+            "largest_cluster_size": row["largest_cluster_size"],
+            "detections_removed": max(0, input_count - output),
+            "detections_fused": max(0, input_count - output),
+            "detections_retained": output,
+        }
+    return finalized
+
+def _metric_value(metrics, key):
+    value = metrics.get(key)
+    return value if isinstance(value, (int, float)) else None
+
+def _fmt(value):
+    if value is None:
+        return "n/a"
+    return f"{float(value):.6f}"
+
+def write_markdown_table(path, title, headers, rows, intro=None):
+    lines = [f"# {title}", ""]
+    if intro:
+        lines.extend([intro, ""])
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+    lines.extend("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+    Path(path).write_text("\n".join(lines) + "\n")
+
+def write_evaluation_validation_report(path, validation_reports, bbox_reports):
+    rows = []
+    for method, stats in validation_reports.items():
+        bbox = bbox_reports.get(method, {})
+        rows.append([
+            method,
+            stats.get("total_rows", 0),
+            stats.get("valid_rows", 0),
+            stats.get("invalid_rows", 0),
+            bbox.get("boxes_converted_to_pixel", "n/a"),
+            bbox.get("boxes_left_unchanged", "n/a"),
+            len(stats.get("missing_image_ids", [])),
+            len(stats.get("invalid_category_ids", [])),
+            stats.get("invalid_scores", 0),
+            stats.get("empty_or_nonpositive_bboxes_removed", 0),
+            stats.get("normalized_looking_bboxes", 0),
+        ])
+    write_markdown_table(
+        path,
+        "Evaluation Validation",
+        ["method", "rows", "valid", "invalid", "converted_to_pixel", "left_unchanged", "missing_images", "invalid_categories", "invalid_scores", "empty_bboxes_removed", "normalized_looking_bboxes"],
+        rows,
+        "Validation checks COCO image/category IDs, score range, pixel-space xywh bboxes, and removal of invalid rows before COCOeval.",
+    )
+
+def write_detection_flow_report(path, flow_stats):
+    rows = []
+    for method, stats in flow_stats.items():
+        rows.append([
+            method,
+            stats["input_detections"],
+            stats["output_detections"],
+            _fmt(stats["detections_per_image"]),
+            _fmt(stats["average_confidence"]),
+            stats["number_of_clusters"],
+            _fmt(stats["average_cluster_size"]),
+            stats["largest_cluster_size"],
+            stats["detections_removed"],
+            stats["detections_fused"],
+            stats["detections_retained"],
+        ])
+    write_markdown_table(path, "Detection Flow Report", ["method", "input detections", "output detections", "detections/image", "avg confidence", "clusters", "avg cluster size", "largest cluster", "removed", "fused", "retained"], rows)
+
+def write_paper_results_comparison(path, paper_targets, metrics):
+    keys = ["AP", "AP50", "AP75", "AR", "AR50", "AR75", "AP_small", "AP_medium", "AP_large", "AR_small", "AR_medium", "AR_large"]
+    rows = []
+    for method, reproduced in metrics.items():
+        if not isinstance(reproduced, dict) or "evaluation" in reproduced:
+            continue
+        target = paper_targets.get(method, {})
+        row = [method]
+        for key in keys:
+            paper = target.get(key)
+            actual = _metric_value(reproduced, key)
+            delta = actual - paper if paper is not None and actual is not None else None
+            row.extend([_fmt(paper), _fmt(actual), _fmt(delta)])
+        rows.append(row)
+    headers = ["method"]
+    for key in keys:
+        headers.extend([f"paper {key}", f"reproduced {key}", f"{key} delta"])
+    write_markdown_table(path, "Paper Results Comparison", headers, rows, "`n/a` means the paper target table in this repository did not provide that metric for the method.")
+
+def build_recall_audit(metrics, flow_stats):
+    valid_metrics = {m: v for m, v in metrics.items() if isinstance(v, dict) and "AR" in v}
+    baseline = valid_metrics.get("WBF")
+    best_ar_method = max(valid_metrics, key=lambda m: valid_metrics[m].get("AR", float("-inf"))) if valid_metrics else None
+    rows = []
+    for method, values in valid_metrics.items():
+        ar = values.get("AR")
+        ap = values.get("AP")
+        ar_delta = ar - baseline.get("AR") if baseline and ar is not None else None
+        ap_delta = ap - baseline.get("AP") if baseline and ap is not None else None
+        output = flow_stats.get(method, {}).get("output_detections", "n/a")
+        rows.append([method, _fmt(ap), _fmt(ar), _fmt(ap_delta), _fmt(ar_delta), output, _fmt(values.get("AR_medium")), _fmt(values.get("AR_large"))])
+    return best_ar_method, rows
+
+def write_recall_argument_audit(path, metrics, flow_stats):
+    best_ar_method, rows = build_recall_audit(metrics, flow_stats)
+    lines = ["# Recall Argument Audit", ""]
+    if not rows:
+        lines.extend(["COCO metrics were not available, so the recall-oriented argument cannot be evaluated from this run.", ""])
+    else:
+        lines.extend([
+            f"Best AR method: `{best_ar_method}`.",
+            "",
+            "The table compares AP/AR deltas against WBF. Positive AR delta with smaller or negative AP delta indicates recall-oriented behavior rather than precision-oriented behavior.",
+            "",
+            "| method | AP | AR | AP delta vs WBF | AR delta vs WBF | output detections | AR medium | AR large |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ])
+        lines.extend("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+        lines.append("")
+    Path(path).write_text("\n".join(lines))
+
+def write_reproduction_limitations(path, args, metrics, validation_reports):
+    limitations = []
+    if not args.annotations:
+        limitations.append("COCO annotations were not supplied, so AP/AR could not be computed.")
+    if not metrics or not any(isinstance(v, dict) and "AP" in v for v in metrics.values()):
+        limitations.append("No computed COCO AP/AR metrics are available for comparison.")
+    for method, stats in validation_reports.items():
+        if stats.get("invalid_rows", 0):
+            limitations.append(f"{method} had {stats['invalid_rows']} invalid prediction rows removed before evaluation.")
+        if stats.get("invalid_category_ids"):
+            limitations.append(f"{method} used category IDs not present in the annotation file: {stats['invalid_category_ids'][:10]}")
+    lines = ["# Reproduction Limitations", "", "## Inputs", "", f"- Benchmark directory: `{args.benchmark_dir or 'n/a'}`", f"- Annotation file: `{args.annotations or 'n/a'}`", f"- bbox scale mode: `{args.bbox_scale}`", f"- IoU threshold: `{args.iou_threshold}`", f"- Score threshold: `{args.score_threshold}`", "", "## Limitations", ""]
+    if limitations:
+        lines.extend(f"- {item}" for item in limitations)
+    else:
+        lines.append("- No blocking validation limitations were detected by the reproduction script.")
+    lines.extend(["", "## Likely causes of mismatch from the paper", "", "- Detector provenance and detector training/inference settings may differ from the original paper.", "- Benchmark CSV labels/scores may not encode every detector calibration detail used in the paper.", "- Implementation details for AWBF competition and negotiation are reconstructed from the paper/spec and may not match unreleased code exactly.", "- Parameter choices such as IoU threshold, negotiation rounds, and attack/defense thresholds can change AP/AR tradeoffs.", "", "The qualitative recall argument is considered supported only when nonzero COCO AR is computed and AR trends are explicitly compared against AP trends in `RECALL_ARGUMENT_AUDIT.md`."])
+    Path(path).write_text("\n".join(lines) + "\n")
+
 def sample_predictions():
     return {'det_a':{1:[Detection((0,0,1,1),.9,1,'det_a'), Detection((2,2,3,3),.7,2,'det_a')]}, 'det_b':{1:[Detection((.1,0,1.1,1),.8,1,'det_b')]}}
 
@@ -233,6 +480,7 @@ def fuse_all(by_model, args):
     image_ids=sorted({i for model in by_model.values() for i in model})
     outputs={k:{} for k in selected_methods}
     timings={k: 0.0 for k in selected_methods}
+    flow_stats = initialize_flow_stats(selected_methods)
     total = len(image_ids)
     interval = max(1, args.progress_interval)
     run_start = time.perf_counter()
@@ -267,6 +515,7 @@ def fuse_all(by_model, args):
             else:
                 outputs['WBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
             timings['WBF'] += time.perf_counter() - start
+            update_flow_stats(flow_stats, 'WBF', box_count, outputs['WBF'][image_id], stats)
 
         if 'AWBF' in selected:
             start = time.perf_counter()
@@ -275,6 +524,7 @@ def fuse_all(by_model, args):
             else:
                 outputs['AWBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
             timings['AWBF'] += time.perf_counter() - start
+            update_flow_stats(flow_stats, 'AWBF', box_count, outputs['AWBF'][image_id], stats)
 
         if 'Incremental_AWBF' in selected:
             start = time.perf_counter()
@@ -283,6 +533,7 @@ def fuse_all(by_model, args):
             else:
                 outputs['Incremental_AWBF'][image_id]=fuse_incremental_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
             timings['Incremental_AWBF'] += time.perf_counter() - start
+            update_flow_stats(flow_stats, 'Incremental_AWBF', box_count, outputs['Incremental_AWBF'][image_id], stats)
 
         comp_clusters = None
         comp_elapsed = 0.0
@@ -296,11 +547,13 @@ def fuse_all(by_model, args):
             if 'AWBF-competition' in selected:
                 outputs['AWBF-competition'][image_id]=[d for cluster in comp_clusters for d in cluster]
                 timings['AWBF-competition'] += comp_elapsed
+                update_flow_stats(flow_stats, 'AWBF-competition', box_count, outputs['AWBF-competition'][image_id], stats)
 
         if 'AWBF-competition-IncrementalState' in selected:
             start = time.perf_counter()
             outputs['AWBF-competition-IncrementalState'][image_id]=incremental_awbf([cluster for cluster in comp_clusters if cluster])
             timings['AWBF-competition-IncrementalState'] += comp_elapsed + (time.perf_counter() - start)
+            update_flow_stats(flow_stats, 'AWBF-competition-IncrementalState', box_count, outputs['AWBF-competition-IncrementalState'][image_id], stats)
 
         def negotiation_progress(event):
             if args.profile:
@@ -340,11 +593,13 @@ def fuse_all(by_model, args):
             if 'AWBF-Negotiation' in selected:
                 outputs['AWBF-Negotiation'][image_id]=[d for cluster in neg_clusters for d in cluster]
                 timings['AWBF-Negotiation'] += neg_elapsed
+                update_flow_stats(flow_stats, 'AWBF-Negotiation', box_count, outputs['AWBF-Negotiation'][image_id], stats)
 
         if 'AWBF-Negotiation-IncrementalState' in selected:
             start = time.perf_counter()
             outputs['AWBF-Negotiation-IncrementalState'][image_id]=incremental_awbf([cluster for cluster in neg_clusters if cluster])
             timings['AWBF-Negotiation-IncrementalState'] += neg_elapsed + (time.perf_counter() - start)
+            update_flow_stats(flow_stats, 'AWBF-Negotiation-IncrementalState', box_count, outputs['AWBF-Negotiation-IncrementalState'][image_id], stats)
 
         if args.profile:
             print(
@@ -356,7 +611,7 @@ def fuse_all(by_model, args):
     print("Fusion timing summary:", flush=True)
     for method, elapsed in timings.items():
         print(f"  {method}: {format_duration(elapsed)}", flush=True)
-    return outputs, timings
+    return outputs, timings, finalize_flow_stats(flow_stats)
 
 def main(argv=None):
     ap=argparse.ArgumentParser()
@@ -378,26 +633,31 @@ def main(argv=None):
         if not args.annotations:
             raise SystemExit("--annotations is required with --evaluate-predictions")
         image_sizes = load_coco_image_sizes(args.annotations)
-        report = {"annotations": args.annotations, "bbox_scale_mode": args.bbox_scale, "metrics": {}, "bbox_reports": {}}
+        coco_meta = load_coco_metadata(args.annotations)
+        report = {"annotations": args.annotations, "bbox_scale_mode": args.bbox_scale, "metrics": {}, "bbox_reports": {}, "evaluation_validation": {}}
         eval_output_dir = Path(args.output_dir) if args.output_dir != 'outputs/reproduction' else Path('outputs')
         eval_output_dir.mkdir(parents=True, exist_ok=True)
         for prediction_json in args.evaluate_predictions:
             with open(prediction_json, "r", encoding="utf-8") as f:
                 original_rows = json.load(f)
             converted_rows, bbox_stats = convert_coco_detection_bboxes(original_rows, image_sizes=image_sizes, bbox_scale=args.bbox_scale)
+            valid_rows, validation_stats = validate_coco_detection_rows(converted_rows, coco_meta)
             eval_file = prediction_json
-            if bbox_stats["boxes_converted_to_pixel"] > 0:
-                eval_file = str(eval_output_dir / f"{Path(prediction_json).stem}_pixel_xywh.json")
+            if bbox_stats["boxes_converted_to_pixel"] > 0 or len(valid_rows) != len(converted_rows):
+                suffix = "pixel_xywh" if bbox_stats["boxes_converted_to_pixel"] > 0 else "validated"
+                eval_file = str(eval_output_dir / f"{Path(prediction_json).stem}_{suffix}.json")
                 with open(eval_file, "w", encoding="utf-8") as f:
-                    json.dump(converted_rows, f, indent=2)
+                    json.dump(valid_rows, f, indent=2)
                 bbox_stats["converted_prediction_file"] = eval_file
             print(f"Evaluating predictions: {eval_file}", flush=True)
             metrics = evaluate_coco(args.annotations, eval_file)
             report["metrics"][prediction_json] = metrics
             report["bbox_reports"][prediction_json] = bbox_stats
+            report["evaluation_validation"][prediction_json] = validation_stats
             print(f"Metrics for {prediction_json}:", flush=True)
             for key, value in metrics.items():
                 print(f"  {key}: {value:.6f}", flush=True)
+        write_evaluation_validation_report(eval_output_dir / "EVALUATION_VALIDATION.md", report["evaluation_validation"], report["bbox_reports"])
         report_path = eval_output_dir / "evaluation_report.json"
         report_path.write_text(json.dumps(report, indent=2))
         print(f"Saved evaluation report to {report_path}", flush=True)
@@ -417,13 +677,20 @@ def main(argv=None):
         by_model=load_predictions(args.predictions_dir)
     os.makedirs(args.output_dir,exist_ok=True)
     image_sizes = load_coco_image_sizes(args.annotations) if args.annotations else None
-    selected_methods=resolve_methods(args.methods); outputs,timings=fuse_all(by_model,args); method_audit=build_method_equivalence_audit(outputs); method_counts=count_method_detections(outputs); report={'paper_targets':PAPER_TARGETS,'selected_methods':selected_methods,'metrics':{},'bbox_scale_mode':args.bbox_scale,'bbox_reports':{},'timings_seconds':timings,'method_detection_counts':method_counts,'method_equivalence_audit':method_audit,'notes':[]}
+    coco_meta = load_coco_metadata(args.annotations) if args.annotations else None
+    selected_methods=resolve_methods(args.methods); outputs,timings,flow_stats=fuse_all(by_model,args); method_audit=build_method_equivalence_audit(outputs); method_counts=count_method_detections(outputs); report={'paper_targets':PAPER_TARGETS,'selected_methods':selected_methods,'metrics':{},'bbox_scale_mode':args.bbox_scale,'bbox_reports':{},'evaluation_validation':{},'timings_seconds':timings,'method_detection_counts':method_counts,'detection_flow':flow_stats,'method_equivalence_audit':method_audit,'notes':[]}
     for method,dets in outputs.items():
         pred_path=os.path.join(args.output_dir,OUTPUT_FILENAMES[method])
         total_detections = sum(len(v) for v in dets.values())
         print(f"Exporting {method}: {total_detections} detections -> {pred_path}", flush=True)
-        _rows, bbox_stats = export_coco_detections(dets,pred_path,image_sizes=image_sizes,bbox_scale=args.bbox_scale,return_stats=True)
+        rows, bbox_stats = export_coco_detections(dets,pred_path,image_sizes=image_sizes,bbox_scale=args.bbox_scale,return_stats=True)
         report['bbox_reports'][method] = bbox_stats
+        valid_rows, validation_stats = validate_coco_detection_rows(rows, coco_meta)
+        report['evaluation_validation'][method] = validation_stats
+        if len(valid_rows) != len(rows):
+            print(f"Validation removed {len(rows) - len(valid_rows)} invalid rows for {method} before evaluation/export", flush=True)
+            with open(pred_path, "w", encoding="utf-8") as f:
+                json.dump(valid_rows, f, indent=2)
         if args.annotations:
             print(f"Evaluating {method} with COCO annotations {args.annotations}", flush=True)
             metrics=evaluate_coco(args.annotations,pred_path)
@@ -435,6 +702,11 @@ def main(argv=None):
         message = 'COCO AP/AR metrics cannot be computed because annotations are missing.' if (args.download_benchmark or args.benchmark_zip or args.benchmark_dir) else 'COCO AP/AR evaluation skipped because --annotations was not supplied; fusion/export does not require full COCO annotations.'
         report['notes'].append(message)
     write_method_equivalence_audit(Path(args.output_dir, 'METHOD_EQUIVALENCE_AUDIT.md'), method_audit, method_counts)
+    write_evaluation_validation_report(Path(args.output_dir, 'EVALUATION_VALIDATION.md'), report['evaluation_validation'], report['bbox_reports'])
+    write_detection_flow_report(Path(args.output_dir, 'DETECTION_FLOW_REPORT.md'), flow_stats)
+    write_paper_results_comparison(Path(args.output_dir, 'PAPER_RESULTS_COMPARISON.md'), PAPER_TARGETS, report['metrics'])
+    write_recall_argument_audit(Path(args.output_dir, 'RECALL_ARGUMENT_AUDIT.md'), report['metrics'], flow_stats)
+    write_reproduction_limitations(Path(args.output_dir, 'REPRODUCTION_LIMITATIONS.md'), args, report['metrics'], report['evaluation_validation'])
     Path(args.output_dir,'reproduction_report.json').write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2))
 if __name__=='__main__': main()

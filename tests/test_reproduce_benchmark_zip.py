@@ -41,6 +41,11 @@ def test_reproduce_uses_local_benchmark_zip(tmp_path):
         "awbf_negotiation_incremental_state_predictions.json",
         "incremental_awbf_predictions.json",
         "METHOD_EQUIVALENCE_AUDIT.md",
+        "EVALUATION_VALIDATION.md",
+        "DETECTION_FLOW_REPORT.md",
+        "PAPER_RESULTS_COMPARISON.md",
+        "RECALL_ARGUMENT_AUDIT.md",
+        "REPRODUCTION_LIMITATIONS.md",
         "reproduction_report.json",
     ]:
         assert (output_dir / filename).is_file()
@@ -50,6 +55,8 @@ def test_reproduce_uses_local_benchmark_zip(tmp_path):
     assert "AWBF-competition-IncrementalState" in report["metrics"]
     assert "AWBF-Negotiation-IncrementalState" in report["timings_seconds"]
     assert "method_equivalence_audit" in report
+    assert "evaluation_validation" in report
+    assert "detection_flow" in report
     assert report["notes"] == ["COCO AP/AR metrics cannot be computed because annotations are missing."]
 
 

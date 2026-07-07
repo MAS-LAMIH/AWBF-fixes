@@ -43,5 +43,7 @@ def test_direct_evaluation_skips_fuse_all(tmp_path, monkeypatch):
 
     assert calls == [(str(ann), str(pred1)), (str(ann), str(pred2))]
     assert report["metrics"][str(pred1)] == {"AP": 0.1, "AP50": 0.2}
+    assert "evaluation_validation" in report
+    assert (tmp_path / "outputs" / "EVALUATION_VALIDATION.md").is_file()
     saved = json.loads((tmp_path / "outputs" / "evaluation_report.json").read_text())
     assert saved == report
