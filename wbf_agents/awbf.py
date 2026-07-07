@@ -406,6 +406,14 @@ def export_coco_detections(
     return (rows, stats) if return_stats else rows
 
 
+def _mean_valid(values: Any) -> float:
+    try:
+        valid = [float(v) for v in values if float(v) >= 0.0]
+    except TypeError:
+        return float("nan")
+    return float(sum(valid) / len(valid)) if valid else float("nan")
+
+
 def evaluate_coco(annotations_json: str, detections_json: str) -> Dict[str, float]:
     from pycocotools.coco import COCO
     from pycocotools.cocoeval import COCOeval
@@ -413,5 +421,30 @@ def evaluate_coco(annotations_json: str, detections_json: str) -> Dict[str, floa
     coco_dt = coco_gt.loadRes(detections_json)
     ev = COCOeval(coco_gt, coco_dt, "bbox")
     ev.evaluate(); ev.accumulate(); ev.summarize()
-    keys = ["AP", "AP50", "AP75", "AP_small", "AP_medium", "AP_large", "AR", "AR50", "AR75", "AR_small", "AR_medium", "AR_large"]
-    return dict(zip(keys, map(float, ev.stats)))
+
+    # Standard COCO stats are AP, AP50, AP75, AP small/medium/large,
+    # AR@maxDets=1/10/100, and AR small/medium/large. They are not AR50/AR75.
+    metrics = {
+        "AP": float(ev.stats[0]),
+        "AP50": float(ev.stats[1]),
+        "AP75": float(ev.stats[2]),
+        "AP_small": float(ev.stats[3]),
+        "AP_medium": float(ev.stats[4]),
+        "AP_large": float(ev.stats[5]),
+        "AR_maxDets1": float(ev.stats[6]),
+        "AR_maxDets10": float(ev.stats[7]),
+        "AR": float(ev.stats[8]),
+        "AR_small": float(ev.stats[9]),
+        "AR_medium": float(ev.stats[10]),
+        "AR_large": float(ev.stats[11]),
+    }
+
+    recalls = ev.eval.get("recall")
+    if recalls is not None:
+        # recall shape: [iou_threshold, category, area_range, max_dets]
+        metrics["AR50"] = _mean_valid(recalls[0, :, 0, -1])
+        metrics["AR75"] = _mean_valid(recalls[5, :, 0, -1])
+    else:
+        metrics["AR50"] = float("nan")
+        metrics["AR75"] = float("nan")
+    return metrics

@@ -20,11 +20,11 @@ from wbf_agents.awbf import Detection, awbf_competition, awbf_negotiation, clust
 from scripts.download_benchmark import EXPECTED_FILES, ensure_benchmark, find_expected_file, validate_benchmark_files
 
 PAPER_TARGETS={
- 'WBF': {'AP':0.673,'AP50':0.894,'AP75':0.709},
- 'AWBF': {'AP':0.610,'AP50':0.660,'AP75':0.625},
- 'AWBF-competition': {'AP':0.651,'AP50':0.666,'AP75':0.590},
+ 'WBF': {'AP':0.673,'AP50':0.894,'AP75':0.709,'AP_small':0.605,'AP_medium':0.731,'AP_large':0.846,'AR':0.471,'AR50':0.627,'AR75':0.846,'AR_small':0.800,'AR_medium':0.850,'AR_large':0.867},
+ 'AWBF': {'AP':0.610,'AP50':0.660,'AP75':0.625,'AP_small':0.610,'AP_medium':0.766,'AP_large':0.675,'AR':0.395,'AR50':0.676,'AR75':0.745,'AR_small':0.664,'AR_medium':0.706,'AR_large':0.819},
+ 'AWBF-competition': {'AP':0.651,'AP50':0.666,'AP75':0.590,'AP_small':0.322,'AP_medium':0.636,'AP_large':0.632,'AR':0.375,'AR50':0.685,'AR75':0.764,'AR_small':0.653,'AR_medium':0.743,'AR_large':0.840},
  'AWBF-competition-IncrementalState': {'AP': None, 'AP50': None, 'AP75': None},
- 'AWBF-Negotiation': {'AP':0.626,'AP50':0.684,'AP75':0.640},
+ 'AWBF-Negotiation': {'AP':0.626,'AP50':0.684,'AP75':0.640,'AP_small':0.622,'AP_medium':0.780,'AP_large':0.701,'AR':0.413,'AR50':0.718,'AR75':0.778,'AR_small':0.684,'AR_medium':0.741,'AR_large':0.859},
  'AWBF-Negotiation-IncrementalState': {'AP': None, 'AP50': None, 'AP75': None},
  'Incremental_AWBF': {'AP': None, 'AP50': None, 'AP75': None},
 }
@@ -270,30 +270,56 @@ def validate_coco_detection_rows(rows, coco_meta=None):
     stats["invalid_rows"] = len(rows) - len(valid_rows)
     return valid_rows, stats
 
+def average_coordinate_displacement(inputs, outputs):
+    if not inputs or not outputs:
+        return 0.0
+    total = 0.0
+    count = 0
+    for out in outputs:
+        same_label = [det for det in inputs if det.label == out.label]
+        candidates = same_label or inputs
+        nearest = min(candidates, key=lambda det: sum(abs(out.box[i] - det.box[i]) for i in range(4)))
+        total += sum(abs(out.box[i] - nearest.box[i]) for i in range(4)) / 4.0
+        count += 1
+    return total / count if count else 0.0
+
+
 def initialize_flow_stats(methods):
     return {
         method: {
             "images": 0,
             "input_detections": 0,
             "output_detections": 0,
+            "input_score_sum": 0.0,
             "score_sum": 0.0,
             "clusters": 0,
             "clustered_detections": 0,
             "largest_cluster_size": 0,
+            "coordinate_displacement_sum": 0.0,
+            "coordinate_displacement_count": 0,
+            "negotiation_round_sum": 0.0,
+            "negotiation_round_count": 0,
         }
         for method in methods
     }
 
-def update_flow_stats(flow_stats, method, input_count, output_detections, stats):
+def update_flow_stats(flow_stats, method, input_detections, output_detections, stats, coordinate_displacement=0.0, negotiation_rounds=None):
     row = flow_stats[method]
+    input_count = len(input_detections)
     output_count = len(output_detections)
     row["images"] += 1
     row["input_detections"] += input_count
+    row["input_score_sum"] += sum(d.score for d in input_detections)
     row["output_detections"] += output_count
     row["score_sum"] += sum(d.score for d in output_detections)
     row["clusters"] += int(stats["clusters"])
     row["clustered_detections"] += input_count
     row["largest_cluster_size"] = max(row["largest_cluster_size"], int(stats["largest_cluster_size"]))
+    row["coordinate_displacement_sum"] += coordinate_displacement * output_count
+    row["coordinate_displacement_count"] += output_count
+    if negotiation_rounds is not None:
+        row["negotiation_round_sum"] += negotiation_rounds
+        row["negotiation_round_count"] += 1
 
 def finalize_flow_stats(flow_stats):
     finalized = {}
@@ -306,6 +332,7 @@ def finalize_flow_stats(flow_stats):
             "input_detections": input_count,
             "output_detections": output,
             "detections_per_image": output / images,
+            "average_input_confidence": (row["input_score_sum"] / input_count) if input_count else 0.0,
             "average_confidence": (row["score_sum"] / output) if output else 0.0,
             "number_of_clusters": row["clusters"],
             "average_cluster_size": row["clustered_detections"] / clusters,
@@ -313,6 +340,8 @@ def finalize_flow_stats(flow_stats):
             "detections_removed": max(0, input_count - output),
             "detections_fused": max(0, input_count - output),
             "detections_retained": output,
+            "average_coordinate_displacement": (row["coordinate_displacement_sum"] / row["coordinate_displacement_count"]) if row["coordinate_displacement_count"] else 0.0,
+            "average_negotiation_rounds_used": (row["negotiation_round_sum"] / row["negotiation_round_count"]) if row["negotiation_round_count"] else 0.0,
         }
     return finalized
 
@@ -359,14 +388,17 @@ def write_evaluation_validation_report(path, validation_reports, bbox_reports):
         "Validation checks COCO image/category IDs, score range, pixel-space xywh bboxes, and removal of invalid rows before COCOeval.",
     )
 
-def write_detection_flow_report(path, flow_stats):
+def write_detection_flow_report(path, flow_stats, validation_reports=None):
+    validation_reports = validation_reports or {}
     rows = []
     for method, stats in flow_stats.items():
+        validation = validation_reports.get(method, {})
         rows.append([
             method,
             stats["input_detections"],
             stats["output_detections"],
             _fmt(stats["detections_per_image"]),
+            _fmt(stats["average_input_confidence"]),
             _fmt(stats["average_confidence"]),
             stats["number_of_clusters"],
             _fmt(stats["average_cluster_size"]),
@@ -374,8 +406,12 @@ def write_detection_flow_report(path, flow_stats):
             stats["detections_removed"],
             stats["detections_fused"],
             stats["detections_retained"],
+            _fmt(stats["average_coordinate_displacement"]),
+            _fmt(stats["average_negotiation_rounds_used"]),
+            validation.get("empty_or_nonpositive_bboxes_removed", 0),
+            len(validation.get("invalid_category_ids", [])),
         ])
-    write_markdown_table(path, "Detection Flow Report", ["method", "input detections", "output detections", "detections/image", "avg confidence", "clusters", "avg cluster size", "largest cluster", "removed", "fused", "retained"], rows)
+    write_markdown_table(path, "Detection Flow Report", ["method", "input detections", "output detections", "detections/image", "avg input confidence", "avg output confidence", "clusters", "avg cluster size", "largest cluster", "removed", "fused", "retained", "avg coord displacement", "avg negotiation rounds", "invalid boxes removed", "invalid categories"], rows)
 
 def write_paper_results_comparison(path, paper_targets, metrics):
     keys = ["AP", "AP50", "AP75", "AR", "AR50", "AR75", "AP_small", "AP_medium", "AP_large", "AR_small", "AR_medium", "AR_large"]
@@ -515,7 +551,7 @@ def fuse_all(by_model, args):
             else:
                 outputs['WBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
             timings['WBF'] += time.perf_counter() - start
-            update_flow_stats(flow_stats, 'WBF', box_count, outputs['WBF'][image_id], stats)
+            update_flow_stats(flow_stats, 'WBF', flat, outputs['WBF'][image_id], stats, average_coordinate_displacement(flat, outputs['WBF'][image_id]))
 
         if 'AWBF' in selected:
             start = time.perf_counter()
@@ -524,7 +560,7 @@ def fuse_all(by_model, args):
             else:
                 outputs['AWBF'][image_id]=fuse_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
             timings['AWBF'] += time.perf_counter() - start
-            update_flow_stats(flow_stats, 'AWBF', box_count, outputs['AWBF'][image_id], stats)
+            update_flow_stats(flow_stats, 'AWBF', flat, outputs['AWBF'][image_id], stats, average_coordinate_displacement(flat, outputs['AWBF'][image_id]))
 
         if 'Incremental_AWBF' in selected:
             start = time.perf_counter()
@@ -533,7 +569,7 @@ def fuse_all(by_model, args):
             else:
                 outputs['Incremental_AWBF'][image_id]=fuse_incremental_wbf_clusters(clusters,args.iou_threshold,args.score_threshold)
             timings['Incremental_AWBF'] += time.perf_counter() - start
-            update_flow_stats(flow_stats, 'Incremental_AWBF', box_count, outputs['Incremental_AWBF'][image_id], stats)
+            update_flow_stats(flow_stats, 'Incremental_AWBF', flat, outputs['Incremental_AWBF'][image_id], stats, average_coordinate_displacement(flat, outputs['Incremental_AWBF'][image_id]))
 
         comp_clusters = None
         comp_elapsed = 0.0
@@ -547,15 +583,17 @@ def fuse_all(by_model, args):
             if 'AWBF-competition' in selected:
                 outputs['AWBF-competition'][image_id]=[d for cluster in comp_clusters for d in cluster]
                 timings['AWBF-competition'] += comp_elapsed
-                update_flow_stats(flow_stats, 'AWBF-competition', box_count, outputs['AWBF-competition'][image_id], stats)
+                update_flow_stats(flow_stats, 'AWBF-competition', flat, outputs['AWBF-competition'][image_id], stats, average_coordinate_displacement(flat, outputs['AWBF-competition'][image_id]))
 
         if 'AWBF-competition-IncrementalState' in selected:
             start = time.perf_counter()
             outputs['AWBF-competition-IncrementalState'][image_id]=incremental_awbf([cluster for cluster in comp_clusters if cluster])
             timings['AWBF-competition-IncrementalState'] += comp_elapsed + (time.perf_counter() - start)
-            update_flow_stats(flow_stats, 'AWBF-competition-IncrementalState', box_count, outputs['AWBF-competition-IncrementalState'][image_id], stats)
+            update_flow_stats(flow_stats, 'AWBF-competition-IncrementalState', flat, outputs['AWBF-competition-IncrementalState'][image_id], stats, average_coordinate_displacement(flat, outputs['AWBF-competition-IncrementalState'][image_id]))
 
+        negotiation_round_events = []
         def negotiation_progress(event):
+            negotiation_round_events.append(event.get("pass", 0))
             if args.profile:
                 elapsed = time.perf_counter() - run_start
                 print(
@@ -593,13 +631,13 @@ def fuse_all(by_model, args):
             if 'AWBF-Negotiation' in selected:
                 outputs['AWBF-Negotiation'][image_id]=[d for cluster in neg_clusters for d in cluster]
                 timings['AWBF-Negotiation'] += neg_elapsed
-                update_flow_stats(flow_stats, 'AWBF-Negotiation', box_count, outputs['AWBF-Negotiation'][image_id], stats)
+                update_flow_stats(flow_stats, 'AWBF-Negotiation', flat, outputs['AWBF-Negotiation'][image_id], stats, average_coordinate_displacement(flat, outputs['AWBF-Negotiation'][image_id]), max(negotiation_round_events, default=0))
 
         if 'AWBF-Negotiation-IncrementalState' in selected:
             start = time.perf_counter()
             outputs['AWBF-Negotiation-IncrementalState'][image_id]=incremental_awbf([cluster for cluster in neg_clusters if cluster])
             timings['AWBF-Negotiation-IncrementalState'] += neg_elapsed + (time.perf_counter() - start)
-            update_flow_stats(flow_stats, 'AWBF-Negotiation-IncrementalState', box_count, outputs['AWBF-Negotiation-IncrementalState'][image_id], stats)
+            update_flow_stats(flow_stats, 'AWBF-Negotiation-IncrementalState', flat, outputs['AWBF-Negotiation-IncrementalState'][image_id], stats, average_coordinate_displacement(flat, outputs['AWBF-Negotiation-IncrementalState'][image_id]), max(negotiation_round_events, default=0))
 
         if args.profile:
             print(
@@ -645,9 +683,8 @@ def main(argv=None):
             eval_file = prediction_json
             if bbox_stats["boxes_converted_to_pixel"] > 0 or len(valid_rows) != len(converted_rows):
                 suffix = "pixel_xywh" if bbox_stats["boxes_converted_to_pixel"] > 0 else "validated"
-                eval_file_path = eval_output_dir / f"{Path(prediction_json).stem}_{suffix}.json"
-                eval_file = eval_file_path.as_posix()
-                with open(eval_file_path, "w", encoding="utf-8") as f:
+                eval_file = str(eval_output_dir / f"{Path(prediction_json).stem}_{suffix}.json")
+                with open(eval_file, "w", encoding="utf-8") as f:
                     json.dump(valid_rows, f, indent=2)
                 bbox_stats["converted_prediction_file"] = eval_file
             print(f"Evaluating predictions: {eval_file}", flush=True)
@@ -704,7 +741,7 @@ def main(argv=None):
         report['notes'].append(message)
     write_method_equivalence_audit(Path(args.output_dir, 'METHOD_EQUIVALENCE_AUDIT.md'), method_audit, method_counts)
     write_evaluation_validation_report(Path(args.output_dir, 'EVALUATION_VALIDATION.md'), report['evaluation_validation'], report['bbox_reports'])
-    write_detection_flow_report(Path(args.output_dir, 'DETECTION_FLOW_REPORT.md'), flow_stats)
+    write_detection_flow_report(Path(args.output_dir, 'DETECTION_FLOW_REPORT.md'), flow_stats, report['evaluation_validation'])
     write_paper_results_comparison(Path(args.output_dir, 'PAPER_RESULTS_COMPARISON.md'), PAPER_TARGETS, report['metrics'])
     write_recall_argument_audit(Path(args.output_dir, 'RECALL_ARGUMENT_AUDIT.md'), report['metrics'], flow_stats)
     write_reproduction_limitations(Path(args.output_dir, 'REPRODUCTION_LIMITATIONS.md'), args, report['metrics'], report['evaluation_validation'])

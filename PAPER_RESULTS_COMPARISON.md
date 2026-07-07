@@ -7,6 +7,8 @@ inside the selected `--output-dir`. The generated table includes, per method:
 - paper AP50 / reproduced AP50 / AP50 delta
 - paper AP75 / reproduced AP75 / AP75 delta
 - paper AR / reproduced AR / AR delta
+- paper AR50 / reproduced custom AR50 / AR50 delta
+- paper AR75 / reproduced custom AR75 / AR75 delta
 - paper AR50 / reproduced AR50 / AR50 delta
 - paper AR75 / reproduced AR75 / AR75 delta
 - AP small/medium/large comparison

@@ -224,3 +224,19 @@ python scripts/reproduce_paper_results.py \
 The run also writes `outputs/reproduction_benchmark/METHOD_EQUIVALENCE_AUDIT.md`
 and includes the same comparison data under `method_equivalence_audit` in
 `reproduction_report.json`.
+
+### Parameter sweeps
+
+Use the sweep script to test the paper's parameter claims for competition
+threshold `T`, negotiation weight `W`, and maximum rounds `Rmax`:
+
+```bash
+python scripts/sweep_awbf_parameters.py \
+  --benchmark-dir data/benchmark \
+  --annotations data/coco/annotations/instances_val2017.json \
+  --bbox-scale auto \
+  --output-dir outputs/parameter_sweep
+```
+
+The script writes `PARAMETER_SWEEP_RESULTS.csv` and, when `matplotlib` is
+available, plots under `outputs/parameter_sweep/plots/`.

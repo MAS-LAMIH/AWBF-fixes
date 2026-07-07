@@ -7,6 +7,7 @@ This repository now generates `EVALUATION_VALIDATION.md` in every reproduction
 - Category IDs exist in the annotation file.
 - Scores are finite and in `[0, 1]`.
 - Bboxes are finite pixel-space COCO `xywh` values before evaluation.
+- COCO AR metrics use correct names: standard stats are `AR_maxDets1`, `AR_maxDets10`, and `AR`; custom `AR50`/`AR75` are computed separately from the recall tensor.
 - Empty/non-positive bboxes are removed before COCOeval.
 - Normalized-looking bboxes are counted so scaling mistakes are visible.
 - Bbox conversion counts from `--bbox-scale auto|normalized|pixel` are reported.

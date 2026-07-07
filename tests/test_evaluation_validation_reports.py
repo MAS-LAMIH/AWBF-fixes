@@ -54,6 +54,9 @@ def test_nonzero_metric_sanity_on_tiny_coco_fixture(tmp_path):
     metrics = evaluate_coco(str(ann), str(pred))
     assert metrics["AP50"] > 0
     assert metrics["AR50"] > 0
+    assert metrics["AR75"] > 0
+    assert "AR_maxDets10" in metrics
+    assert "AR_maxDets1" in metrics
 
 
 def test_recall_ap_comparison_report_generation(tmp_path):

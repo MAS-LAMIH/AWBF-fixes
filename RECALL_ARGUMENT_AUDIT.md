@@ -13,7 +13,7 @@ The reproduction script now writes `RECALL_ARGUMENT_AUDIT.md` inside the selecte
 ## Acceptance rule
 
 The recall-oriented argument is not considered supported by this repository
-unless nonzero COCO AR metrics are computed and AP-vs-AR trends are explicitly
+unless nonzero COCO AR metrics are computed, AR50/AR75 are not mislabeled COCO maxDets stats, and AP-vs-AR trends are explicitly
 compared against WBF.
 
 ## Current environment status

@@ -6,13 +6,18 @@ The reproduction script now writes `DETECTION_FLOW_REPORT.md` inside the selecte
 - input detections,
 - output detections,
 - detections per image,
+- average input confidence,
 - average output confidence,
 - number of clusters,
 - average cluster size,
 - largest cluster size,
 - detections removed,
 - detections fused,
-- detections retained.
+- detections retained,
+- average coordinate displacement,
+- average negotiation rounds used,
+- invalid boxes removed,
+- invalid categories.
 
 These diagnostics are intended to explain whether a method preserves/refines
 more detections or aggressively suppresses them.

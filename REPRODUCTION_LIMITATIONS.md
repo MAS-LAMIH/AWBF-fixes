@@ -29,6 +29,21 @@ Tunnel connection failed: 403 Forbidden
 The COCO annotation path `data/coco/annotations/instances_val2017.json` is also
 not present in this checkout.
 
+
+## Parameter sweep status
+
+The parameter sweep script is available and was smoke-tested with `--sample`, but
+the full benchmark sweep was not run in this environment for the same missing
+benchmark/annotation and blocked-download reasons. Run it locally with:
+
+```bash
+python scripts/sweep_awbf_parameters.py \
+  --benchmark-dir data/benchmark \
+  --annotations data/coco/annotations/instances_val2017.json \
+  --bbox-scale auto \
+  --output-dir outputs/parameter_sweep
+```
+
 ## Missing detector provenance
 
 The benchmark archive is expected to provide detector CSVs, but the original
@@ -45,6 +60,7 @@ potential source of mismatch even when the benchmark CSVs are supplied.
 - Benchmark labels must match COCO category IDs; otherwise evaluation validation
   will report invalid categories.
 - Normalized boxes must be converted to pixel-space COCO `xywh` before COCOeval.
+- Standard COCOeval AR maxDets stats must not be mislabeled as AR50/AR75; this code now reports maxDets fields separately and computes custom AR50/AR75.
 
 ## Current conclusion
 
