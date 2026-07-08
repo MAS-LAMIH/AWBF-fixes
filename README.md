@@ -240,3 +240,48 @@ python scripts/sweep_awbf_parameters.py \
 
 The script writes `PARAMETER_SWEEP_RESULTS.csv` and, when `matplotlib` is
 available, plots under `outputs/parameter_sweep/plots/`.
+
+## Image-level bootstrap statistical evaluation
+
+Reviewer questions about statistical stability should be handled as an
+**image-level bootstrap analysis**, not classical k-fold cross-validation. This
+repository performs deterministic post-processing of fixed detector outputs; it
+does not retrain detectors or rerun detector inference, so k-fold training
+validation is not the appropriate test.
+
+After generating fused prediction JSON files in `outputs/reproduction_benchmark`,
+run:
+
+```bash
+python scripts/bootstrap_evaluation.py \
+  --annotations data/coco/annotations/instances_val2017.json \
+  --predictions-dir outputs/reproduction_benchmark \
+  --output-dir outputs/bootstrap \
+  --num-samples 100 \
+  --sample-size 5000 \
+  --seed 42
+```
+
+The script samples COCO validation image IDs with replacement, creates temporary
+COCO annotation/prediction subsets for each bootstrap replicate, evaluates each
+existing fused prediction JSON with COCOeval, and reports means, standard
+deviations, and 95% confidence intervals for:
+
+- AP, AP50, AP75
+- AP_small, AP_medium, AP_large
+- AR1, AR10, AR100
+- AR_small, AR_medium, AR_large
+
+It also performs paired comparisons against `WBF` on the same bootstrap samples
+and reports mean deltas, delta confidence intervals, and the proportions of
+samples where each method is greater than, equal to, or less than WBF. Do not
+claim statistical significance when a paired-delta confidence interval overlaps
+zero.
+
+Outputs are written to:
+
+- `outputs/bootstrap/bootstrap_report.json`
+- `outputs/bootstrap/BOOTSTRAP_EVALUATION.md`
+- `outputs/bootstrap/bootstrap_summary.csv`
+- `outputs/bootstrap/bootstrap_deltas.csv`
+- `outputs/bootstrap/bootstrap_table.tex`
